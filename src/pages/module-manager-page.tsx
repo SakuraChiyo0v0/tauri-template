@@ -2,20 +2,15 @@ import { Boxes, Power } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Switch } from "@/components/ui/switch";
-import { featureRegistry } from "@/app/module-registry";
+import { featureRegistry } from "@/app/feature-registry";
 import { useFeatureStateSnapshot } from "@/core/features/feature-state";
 
 export function ModuleManagerPage() {
   useFeatureStateSnapshot();
-  const features = featureRegistry.getAll();
+  const features = featureRegistry.getManageable();
 
   return (
-    <section className="space-y-5">
-      <div>
-        <h2 className="text-xl font-semibold tracking-tight">模块</h2>
-        <p className="mt-1 text-sm text-muted-foreground">已安装模块来自源码注册表；停用模块会移除它提供的前端扩展。</p>
-      </div>
-
+    <section>
       <div className="grid gap-4 md:grid-cols-2">
         {features.map((feature) => {
           const enabled = featureRegistry.isEnabled(feature);
@@ -29,6 +24,7 @@ export function ModuleManagerPage() {
                     <Badge variant="outline">v{feature.version}</Badge>
                   </div>
                   <CardDescription>{feature.description}</CardDescription>
+                  <p className="text-xs text-muted-foreground">{feature.navigation?.length ?? 0} 个页面 · {feature.settings?.length ?? 0} 个设置项</p>
                 </div>
                 <Switch
                   checked={enabled}

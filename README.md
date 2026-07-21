@@ -23,8 +23,9 @@ pnpm tauri build
 
 - `components/ui` 是已配置好的无业务基础组件，可以直接导入。
 - `themes` 通过语义 CSS 变量同步所有组件，显示模式与配色预设彼此独立。
-- `core` 提供稳定的模块、设置和持久化契约。
+- `core` 提供稳定的模块、导航、设置和持久化契约。
 - `features` 保存可从源码添加或移除的功能模块。
+- `App` 只渲染模块贡献的侧边栏和页面，不直接依赖具体功能。
 - `SettingsPage` 不感知具体模块；模块通过清单贡献设置。
 - 首版不提供运行时下载、远程执行或插件市场。
 
@@ -39,6 +40,17 @@ export const exampleFeature = defineFeature({
   description: "模块说明",
   version: "0.1.0",
   defaultEnabled: true,
+  navigation: [
+    {
+      id: "example-home",
+      title: "示例功能",
+      description: "示例页面说明",
+      icon: ExampleIcon,
+      component: ExamplePage,
+      group: "main",
+      order: 20,
+    },
+  ],
   settings: [
     {
       id: "enabledOption",
@@ -52,7 +64,7 @@ export const exampleFeature = defineFeature({
 });
 ```
 
-然后仅在 `src/app/module-registry.ts` 注册一次。设置页会自动按 `group` 和 `order` 显示设置项。
+然后仅在 `src/app/module-registry.ts` 注册一次。侧边栏会自动显示已启用模块贡献的页面，设置页会自动按 `group` 和 `order` 显示设置项。停用模块时，这两类扩展都会自动消失。
 
 更完整的 AI 操作步骤位于 `.ai/recipes`。仓库根目录及关键目录中的 `AGENTS.md` 定义了模块边界和验证规则。
 
@@ -63,8 +75,10 @@ export const exampleFeature = defineFeature({
 - 前端通过 `logger.trace/debug/info/warn/error` 记录日志；
 - Rust 使用标准 `log` 宏；
 - Tauri 官方日志插件默认写入终端及系统推荐的应用日志目录；
+- 模块向侧边栏注册日志控制台，可筛选、搜索、导出和清空当前会话日志；
+- 控制台最多保留最近 1000 条日志，清空不会删除磁盘日志文件；
 - 日志级别和控制台同步选项由模块清单注入设置页面；
-- 停用模块会停止前端日志和隐藏其设置贡献。
+- 停用模块会停止前端日志，并隐藏其页面和设置贡献。
 
 如果要从源码彻底移除日志模块，还应同时移除：
 

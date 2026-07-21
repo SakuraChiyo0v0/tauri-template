@@ -1,31 +1,156 @@
-import { Boxes, Settings2 } from "lucide-react";
-import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
-import { ModuleManagerPage } from "@/pages/module-manager-page";
-import { SettingsPage } from "@/pages/settings-page";
+import { useEffect, useState } from "react";
+import { Boxes, PanelLeftClose, PanelLeftOpen } from "lucide-react";
+import { featureRegistry } from "@/app/feature-registry";
+import { readStoredNavigationId, resolveActiveNavigation, storeNavigationId } from "@/app/navigation-state";
+import { Badge } from "@/components/ui/badge";
+import { useFeatureStateSnapshot } from "@/core/features/feature-state";
+import type { ResolvedNavigation } from "@/core/features/feature-types";
+import { cn } from "@/lib/utils";
+
+const SIDEBAR_STORAGE_KEY = "modular-tauri.sidebar-collapsed.v1";
+
+function NavigationButton({ entry, active, collapsed, onSelect }: {
+  entry: ResolvedNavigation;
+  active: boolean;
+  collapsed: boolean;
+  onSelect: () => void;
+}) {
+  const Icon = entry.icon;
+
+  return (
+    <button
+      type="button"
+      title={collapsed ? entry.title : undefined}
+      aria-current={active ? "page" : undefined}
+      onClick={onSelect}
+      className={cn(
+        "group flex h-11 w-full items-center gap-3 rounded-lg px-3 text-left text-sm font-medium outline-none transition-colors focus-visible:ring-2 focus-visible:ring-ring",
+        active
+          ? "bg-accent text-accent-foreground"
+          : "text-muted-foreground hover:bg-muted hover:text-foreground",
+        collapsed && "justify-center px-0",
+      )}
+    >
+      <Icon className={cn("size-5 shrink-0", active ? "text-primary" : "text-muted-foreground group-hover:text-foreground")} />
+      {!collapsed && <span className="truncate">{entry.title}</span>}
+    </button>
+  );
+}
 
 function App() {
-  return (
-    <div className="min-h-screen bg-background">
-      <header className="border-b border-border bg-card/80 backdrop-blur">
-        <div className="mx-auto flex max-w-5xl items-center justify-between px-6 py-4">
-          <div>
-            <h1 className="text-lg font-semibold tracking-tight">Modular Tauri Template</h1>
-            <p className="text-xs text-muted-foreground">空业务、可扩展的桌面应用底座</p>
-          </div>
-          <span className="rounded-full border border-border bg-muted px-3 py-1 text-xs font-medium text-muted-foreground">首版</span>
-        </div>
-      </header>
+  useFeatureStateSnapshot();
+  const navigation = featureRegistry.getNavigation();
+  const [requestedNavigationId, setRequestedNavigationId] = useState(readStoredNavigationId);
+  const [sidebarCollapsed, setSidebarCollapsed] = useState(
+    () => localStorage.getItem(SIDEBAR_STORAGE_KEY) === "true",
+  );
+  const activeNavigation = resolveActiveNavigation(navigation, requestedNavigationId);
+  const mainNavigation = navigation.filter((entry) => (entry.group ?? "main") === "main");
+  const systemNavigation = navigation.filter((entry) => entry.group === "system");
 
-      <main className="mx-auto max-w-5xl px-6 py-7">
-        <Tabs defaultValue="modules">
-          <TabsList>
-            <TabsTrigger value="modules"><Boxes className="mr-2 size-4" />模块管理</TabsTrigger>
-            <TabsTrigger value="settings"><Settings2 className="mr-2 size-4" />设置</TabsTrigger>
-          </TabsList>
-          <TabsContent value="modules"><ModuleManagerPage /></TabsContent>
-          <TabsContent value="settings"><SettingsPage /></TabsContent>
-        </Tabs>
-      </main>
+  useEffect(() => {
+    if (activeNavigation && activeNavigation.id !== requestedNavigationId) {
+      setRequestedNavigationId(activeNavigation.id);
+      storeNavigationId(activeNavigation.id);
+    }
+  }, [activeNavigation, requestedNavigationId]);
+
+  const selectNavigation = (id: string) => {
+    setRequestedNavigationId(id);
+    storeNavigationId(id);
+  };
+
+  const toggleSidebar = () => {
+    const nextValue = !sidebarCollapsed;
+    setSidebarCollapsed(nextValue);
+    localStorage.setItem(SIDEBAR_STORAGE_KEY, String(nextValue));
+  };
+
+  const ActivePage = activeNavigation?.component;
+
+  return (
+    <div className="flex h-screen overflow-hidden bg-background">
+      <aside
+        className={cn(
+          "flex shrink-0 flex-col border-r border-border bg-card transition-[width] duration-200",
+          sidebarCollapsed ? "w-[72px]" : "w-56",
+        )}
+      >
+        <div className={cn("flex h-16 items-center border-b border-border px-4", sidebarCollapsed ? "justify-center" : "gap-3")}>
+          <div className="flex size-10 shrink-0 items-center justify-center rounded-xl border border-border bg-background shadow-sm">
+            <Boxes className="size-5 text-primary" />
+          </div>
+          {!sidebarCollapsed && (
+            <div className="min-w-0">
+              <div className="truncate text-base font-semibold">Modular Tauri</div>
+              <div className="truncate text-xs text-muted-foreground">可扩展桌面底座</div>
+            </div>
+          )}
+        </div>
+
+        <nav className="flex min-h-0 flex-1 flex-col p-3" aria-label="功能导航">
+          <div className="space-y-1">
+            {mainNavigation.map((entry) => (
+              <NavigationButton
+                key={entry.id}
+                entry={entry}
+                active={entry.id === activeNavigation?.id}
+                collapsed={sidebarCollapsed}
+                onSelect={() => selectNavigation(entry.id)}
+              />
+            ))}
+          </div>
+
+          <div className="mt-auto space-y-1 border-t border-border pt-3">
+            {systemNavigation.map((entry) => (
+              <NavigationButton
+                key={entry.id}
+                entry={entry}
+                active={entry.id === activeNavigation?.id}
+                collapsed={sidebarCollapsed}
+                onSelect={() => selectNavigation(entry.id)}
+              />
+            ))}
+          </div>
+        </nav>
+
+        <div className="border-t border-border p-3">
+          <button
+            type="button"
+            onClick={toggleSidebar}
+            className={cn(
+              "flex h-10 w-full items-center gap-3 rounded-lg px-3 text-sm text-muted-foreground outline-none hover:bg-muted hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring",
+              sidebarCollapsed && "justify-center px-0",
+            )}
+            aria-label={sidebarCollapsed ? "展开侧边栏" : "收起侧边栏"}
+          >
+            {sidebarCollapsed ? <PanelLeftOpen className="size-5" /> : <PanelLeftClose className="size-5" />}
+            {!sidebarCollapsed && <span>收起侧边栏</span>}
+          </button>
+        </div>
+      </aside>
+
+      <div className="flex min-w-0 flex-1 flex-col">
+        <header className="flex h-16 shrink-0 items-center justify-between border-b border-border bg-card px-7">
+          <div className="min-w-0">
+            <h1 className="truncate text-xl font-semibold tracking-tight">{activeNavigation?.title ?? "没有可用页面"}</h1>
+            {activeNavigation?.description && <p className="mt-1 truncate text-sm text-muted-foreground">{activeNavigation.description}</p>}
+          </div>
+          {activeNavigation && <Badge variant="outline">{activeNavigation.moduleName}</Badge>}
+        </header>
+
+        <main className="min-h-0 flex-1 overflow-y-auto bg-muted/25 p-7">
+          <div className="mx-auto w-full max-w-6xl">
+            {ActivePage ? (
+              <ActivePage />
+            ) : (
+              <div className="rounded-xl border border-dashed border-border bg-card p-10 text-center text-sm text-muted-foreground">
+                当前没有模块注册功能页面。
+              </div>
+            )}
+          </div>
+        </main>
+      </div>
     </div>
   );
 }
