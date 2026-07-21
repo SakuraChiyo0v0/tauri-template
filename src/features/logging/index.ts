@@ -1,6 +1,8 @@
+import { SquareTerminal } from "lucide-react";
 import { defineFeature } from "@/core/features/feature-types";
 import { getSetting } from "@/core/settings/setting-store";
-import { applyNativeLogLevel, logger, type LogLevel } from "./logger";
+import { LogConsolePage } from "./log-console-page";
+import { applyNativeLogLevel, attachNativeLogBridge, logger, type LogLevel } from "./logger";
 
 export const loggingFeature = defineFeature({
   id: "logging",
@@ -8,6 +10,17 @@ export const loggingFeature = defineFeature({
   description: "为前端和 Rust 提供统一的分级日志，并写入应用日志目录。",
   version: "0.1.0",
   defaultEnabled: true,
+  navigation: [
+    {
+      id: "logs",
+      title: "日志",
+      description: "查看和筛选当前运行会话的分级日志",
+      icon: SquareTerminal,
+      group: "main",
+      order: 100,
+      component: LogConsolePage,
+    },
+  ],
   settings: [
     {
       id: "level",
@@ -37,6 +50,11 @@ export const loggingFeature = defineFeature({
     },
   ],
   setup: async () => {
+    try {
+      await attachNativeLogBridge();
+    } catch (error) {
+      console.error("Failed to attach native log bridge", error);
+    }
     const level = getSetting<LogLevel>("logging", "level", "info");
     await applyNativeLogLevel(level);
     await logger.info("Logging feature initialized");

@@ -3,7 +3,7 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/com
 import { Label } from "@/components/ui/label";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Switch } from "@/components/ui/switch";
-import { featureRegistry } from "@/app/module-registry";
+import { featureRegistry } from "@/app/feature-registry";
 import { useFeatureStateSnapshot } from "@/core/features/feature-state";
 import { useSetting } from "@/core/settings/setting-store";
 import type { ResolvedSetting } from "@/core/settings/setting-types";
@@ -81,11 +81,6 @@ export function SettingsPage() {
 
   return (
     <section className="space-y-5">
-      <div>
-        <h2 className="text-xl font-semibold tracking-tight">设置</h2>
-        <p className="mt-1 text-sm text-muted-foreground">页面只负责呈现；模块通过清单贡献自己的设置项。</p>
-      </div>
-
       <Card>
         <CardHeader>
           <div className="flex items-center gap-2"><Palette className="size-4 text-primary" /><CardTitle>外观</CardTitle></div>
