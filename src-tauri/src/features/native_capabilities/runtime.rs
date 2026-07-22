@@ -243,7 +243,11 @@ impl NativeRuntimeState {
         }
 
         let menu = Menu::new(&self.app).map_err(|error| format!("create tray menu: {error}"))?;
-        let show_label = if locale == "en" { "Show main window" } else { "显示主窗口" };
+        let show_label = if locale == "en" {
+            "Show main window"
+        } else {
+            "显示主窗口"
+        };
         let show = MenuItem::with_id(&self.app, "host::show", show_label, true, None::<&str>)
             .map_err(|error| format!("create tray show item: {error}"))?;
         menu.append(&show)
@@ -362,7 +366,7 @@ fn handle_tray_menu_event(app: &AppHandle, id: &str) {
     }
 }
 
-fn active_v3_module(
+fn active_native_module(
     app: &AppHandle,
     module_id: &str,
 ) -> Result<crate::features::runtime_modules::store::InstalledRuntimeModule, String> {
@@ -372,11 +376,11 @@ fn active_v3_module(
         .into_iter()
         .find(|module| module.manifest.id == module_id)
         .ok_or_else(|| format!("runtime module is not installed: {module_id}"))?;
-    if module.manifest.sdk_version != 3
+    if module.manifest.sdk_version < 3
         || module.status != crate::features::runtime_modules::types::RuntimeModuleStatus::Active
     {
         return Err(format!(
-            "runtime module is not an active Host SDK V3 module: {module_id}"
+            "runtime module is not an active Host SDK V3 or V4 module: {module_id}"
         ));
     }
     Ok(module)
@@ -388,7 +392,7 @@ pub fn list_runtime_module_native_file_grants(
     state: State<'_, NativeRuntimeState>,
     module_id: String,
 ) -> Result<Vec<FileGrantSummary>, String> {
-    active_v3_module(&app, &module_id)?;
+    active_native_module(&app, &module_id)?;
     state
         .list_admin_grants(&module_id)
         .map(|grants| grants.into_iter().map(FileGrantSummary::from).collect())
@@ -403,7 +407,7 @@ pub fn create_runtime_module_file_grant(
     kind: GrantKind,
     access: GrantAccess,
 ) -> Result<FileGrantSummary, String> {
-    let module = active_v3_module(&app, &module_id)?;
+    let module = active_native_module(&app, &module_id)?;
     let permissions = module.manifest.normalized_native_capabilities()?;
     let allowed = match kind {
         GrantKind::Executable => permissions
@@ -433,7 +437,7 @@ pub fn revoke_runtime_module_admin_file_grant(
     module_id: String,
     grant_id: String,
 ) -> Result<(), String> {
-    active_v3_module(&app, &module_id)?;
+    active_native_module(&app, &module_id)?;
     state.revoke_admin_grant(&module_id, &grant_id)
 }
 
@@ -443,7 +447,7 @@ pub fn list_runtime_module_shortcut_statuses(
     state: State<'_, NativeRuntimeState>,
     module_id: String,
 ) -> Result<Vec<ShortcutStatus>, String> {
-    active_v3_module(&app, &module_id)?;
+    active_native_module(&app, &module_id)?;
     state.shortcut_statuses(&module_id)
 }
 
@@ -455,7 +459,7 @@ pub fn rebind_runtime_module_shortcut(
     shortcut_id: String,
     accelerator: String,
 ) -> Result<Vec<ShortcutStatus>, String> {
-    active_v3_module(&app, &module_id)?;
+    active_native_module(&app, &module_id)?;
     state.rebind_admin_shortcut(&module_id, &shortcut_id, &accelerator)
 }
 
@@ -466,7 +470,7 @@ pub fn disable_runtime_module_shortcut(
     module_id: String,
     shortcut_id: String,
 ) -> Result<Vec<ShortcutStatus>, String> {
-    active_v3_module(&app, &module_id)?;
+    active_native_module(&app, &module_id)?;
     state.disable_admin_shortcut(&module_id, &shortcut_id)
 }
 
@@ -485,8 +489,8 @@ pub fn create_runtime_module_native_session(
         .ok_or_else(|| format!("runtime module is not installed: {module_id}"))?;
     let selected = module.selected_version.as_deref() == Some(version.as_str())
         && module.status == crate::features::runtime_modules::types::RuntimeModuleStatus::Active;
-    if module.manifest.sdk_version != 3 {
-        return Err("native sessions require Host SDK V3".into());
+    if module.manifest.sdk_version < 3 {
+        return Err("native sessions require Host SDK V3 or V4".into());
     }
     let permissions = module.manifest.normalized_native_capabilities()?;
     let permission_path = app
@@ -494,8 +498,9 @@ pub fn create_runtime_module_native_session(
         .app_data_dir()
         .map_err(|error| format!("resolve application data directory: {error}"))?
         .join("native-permissions.json");
-    let approved = PermissionStore::new(permission_path).decision(&module_id, &permissions)?
-        == PermissionDecision::Approved;
+    let approved = permissions.summary().is_empty()
+        || PermissionStore::new(permission_path).decision(&module_id, &permissions)?
+            == PermissionDecision::Approved;
     state.release_module(&module_id);
     let token = state.sessions.issue(
         &module_id,

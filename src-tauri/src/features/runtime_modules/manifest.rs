@@ -9,7 +9,7 @@ use crate::features::native_capabilities::permissions::{
 
 pub const SCHEMA_VERSION: u32 = 2;
 pub const MIN_SDK_VERSION: u32 = 2;
-pub const MAX_SDK_VERSION: u32 = 3;
+pub const MAX_SDK_VERSION: u32 = 4;
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, PartialOrd, Ord)]
 #[serde(deny_unknown_fields)]
@@ -40,6 +40,8 @@ pub struct RuntimeModuleManifest {
     #[serde(default)]
     pub dependencies: RuntimeModuleDependencies,
     #[serde(default)]
+    pub services: RuntimeModuleServices,
+    #[serde(default)]
     pub navigation: Vec<RuntimeNavigationManifest>,
     #[serde(default)]
     pub settings: Vec<RuntimeSettingManifest>,
@@ -59,6 +61,12 @@ pub struct RuntimeModuleDependencies {
 pub struct RuntimeModuleDependency {
     pub id: String,
     pub version: String,
+}
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq)]
+pub struct RuntimeModuleServices {
+    #[serde(default)]
+    pub provides: Vec<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -176,6 +184,16 @@ impl RuntimeModuleManifest {
             })?;
         }
 
+        if self.sdk_version < 4 && !self.services.provides.is_empty() {
+            return Err("module services require Host SDK V4".into());
+        }
+        let mut service_ids = HashSet::new();
+        for service_id in &self.services.provides {
+            if !is_service_id(service_id) || !service_ids.insert(service_id) {
+                return Err(format!("invalid or duplicate service id: {service_id}"));
+            }
+        }
+
         let mut navigation_ids = HashSet::new();
         let mut elements = HashSet::new();
         for navigation in &self.navigation {
@@ -282,6 +300,21 @@ fn is_contribution_id(value: &str) -> bool {
         })
 }
 
+fn is_service_id(value: &str) -> bool {
+    (3..=64).contains(&value.len())
+        && value
+            .chars()
+            .next()
+            .is_some_and(|character| character.is_ascii_lowercase())
+        && (value.contains('.') || value.contains('-'))
+        && value.split(['.', '-']).all(|segment| {
+            !segment.is_empty()
+                && segment
+                    .chars()
+                    .all(|character| character.is_ascii_lowercase() || character.is_ascii_digit())
+        })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -304,6 +337,7 @@ mod tests {
             sdk_version: 2,
             entry: "index.js".into(),
             dependencies: RuntimeModuleDependencies::default(),
+            services: RuntimeModuleServices::default(),
             navigation: vec![RuntimeNavigationManifest {
                 id: "hello-home".into(),
                 title: text("问候", "Hello"),
@@ -333,13 +367,15 @@ mod tests {
     }
 
     #[test]
-    fn accepts_sdk_v2_and_v3_but_rejects_other_versions() {
+    fn accepts_sdk_v2_v3_and_v4_but_rejects_other_versions() {
         let mut value = manifest();
         value.sdk_version = 3;
         assert!(value.validate(&Version::new(0, 1, 0)).is_ok());
+        value.sdk_version = 4;
+        assert!(value.validate(&Version::new(0, 1, 0)).is_ok());
         value.sdk_version = 1;
         assert!(value.validate(&Version::new(0, 1, 0)).is_err());
-        value.sdk_version = 4;
+        value.sdk_version = 5;
         assert!(
             value
                 .validate(&Version::new(0, 1, 0))
@@ -349,14 +385,50 @@ mod tests {
     }
 
     #[test]
-    fn rejects_missing_or_blank_translations() {
+    fn accepts_declared_services_on_v4_and_rejects_invalid_or_older_declarations() {
         let mut value = serde_json::to_value(manifest()).unwrap();
-        value["name"] = serde_json::json!({ "zh-CN": "问候模块" });
-        assert!(RuntimeModuleManifest::parse_and_validate(
+        value["sdkVersion"] = serde_json::json!(4);
+        value["services"] = serde_json::json!({ "provides": ["notes.v1"] });
+        let parsed = RuntimeModuleManifest::parse_and_validate(
             &serde_json::to_vec(&value).unwrap(),
             &Version::new(0, 1, 0),
         )
-        .is_err());
+        .unwrap();
+        assert_eq!(parsed.services.provides, vec!["notes.v1"]);
+
+        value["sdkVersion"] = serde_json::json!(3);
+        assert!(
+            RuntimeModuleManifest::parse_and_validate(
+                &serde_json::to_vec(&value).unwrap(),
+                &Version::new(0, 1, 0),
+            )
+            .unwrap_err()
+            .contains("service")
+        );
+
+        value["sdkVersion"] = serde_json::json!(4);
+        value["services"] = serde_json::json!({ "provides": ["notes.v1", "notes.v1"] });
+        assert!(
+            RuntimeModuleManifest::parse_and_validate(
+                &serde_json::to_vec(&value).unwrap(),
+                &Version::new(0, 1, 0),
+            )
+            .unwrap_err()
+            .contains("service")
+        );
+    }
+
+    #[test]
+    fn rejects_missing_or_blank_translations() {
+        let mut value = serde_json::to_value(manifest()).unwrap();
+        value["name"] = serde_json::json!({ "zh-CN": "问候模块" });
+        assert!(
+            RuntimeModuleManifest::parse_and_validate(
+                &serde_json::to_vec(&value).unwrap(),
+                &Version::new(0, 1, 0),
+            )
+            .is_err()
+        );
 
         value = serde_json::to_value(manifest()).unwrap();
         value["navigation"][0]["title"]["en"] = serde_json::json!("  ");

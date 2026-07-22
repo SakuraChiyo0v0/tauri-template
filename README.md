@@ -91,15 +91,21 @@ export const exampleFeature = defineFeature({
 
 ## 添加可独立更新的运行时模块
 
-运行时模块在独立的 `tauri-module-template` 工作区开发，不应复制到底座仓库或注册到 `src/app/module-registry.ts`。该模板提供 schema V2 双语清单、Host SDK V3 类型、语言模拟宿主、测试、单文件 ESM 构建和 `.mtp` 打包工具。新底座不再接受 schema V1 或 Host SDK V1 模块包。
+运行时模块在独立的 `tauri-module-template` 工作区开发，不应复制到底座仓库或注册到 `src/app/module-registry.ts`。该模板提供 schema V2 双语清单、Host SDK V4 类型、语言与服务模拟宿主、测试、单文件 ESM 构建和 `.mtp` 打包工具。新底座不再接受 schema V1 或 Host SDK V1 模块包。
 
-Host SDK V2 是当前最低协议，提供语言读取/订阅和模块隔离 SQLite；V3 在此基础上增加原生能力。底座为每个模块创建隔离的 SQLite 数据库，并通过参数化查询、执行、事务和 schema 版本接口访问；模块不能指定数据库路径、附加其他数据库或直接查询其他模块的数据。普通卸载保留数据库，停用模块后可在“模块管理”中显式清理。
+Host SDK V2 是当前最低协议，提供语言读取/订阅和模块隔离 SQLite；V3 在此基础上增加原生能力；V4 再增加受依赖约束的模块服务。底座为每个模块创建隔离的 SQLite 数据库，并通过参数化查询、执行、事务和 schema 版本接口访问；模块不能指定数据库路径、附加其他数据库或直接查询其他模块的数据。普通卸载保留数据库，停用模块后可在“模块管理”中显式清理。
 
-模块使用的 npm 库必须打包进 `index.js`；只有对其他已安装 `.mtp` 模块的要求才写入 `manifest.json` 的 `dependencies.required` 或 `dependencies.optional`。必需依赖缺失或版本不兼容时，包仍会保留，但模块会等待而不会执行；可选依赖不会阻止模块启动。依赖仅约束兼容版本与激活顺序，不允许直接导入其他模块源码或调用其内部实现。
+模块使用的 npm 库必须打包进 `index.js`；只有对其他已安装 `.mtp` 模块的要求才写入 `manifest.json` 的 `dependencies.required` 或 `dependencies.optional`。必需依赖缺失或版本不兼容时，包仍会保留，但模块会等待而不会执行；可选依赖不会阻止模块启动。模块不得导入其他模块源码或读取其数据库；SDK V4 消费者只能通过 `services.call()` 调用清单依赖，提供者也只能通过 `services.expose()` 注册 `services.provides` 中声明的服务。
 
-### Host SDK V3 原生能力
+### Host SDK V4 模块服务
 
-V3 模块在 `nativeCapabilities` 中声明最小权限。新模块或权限扩大的更新会先安装为“等待权限”，用户在模块管理页查看摘要并批准后才会激活；权限缩小的更新可以复用已有批准。撤销权限会立即使会话失效，并清理模块进程、托盘和快捷键资源。
+服务 ID 应带主版本，例如 `notes.v1`。服务只传递受限 JSON 值，调用两侧获得隔离副本；函数、DOM、类实例、循环引用和超限数据会被拒绝。服务注册随模块 Host SDK 生命周期自动清理，计划重载后由模块重新注册。该边界用于可信模块协作，不是恶意 JavaScript 沙箱。
+
+配套验证模块保持为底座外的独立 Git 仓库：`local-notes` 提供 SQLite CRUD 与 `notes.v1`，`notes-dashboard` 依赖并消费该服务，`quick-launcher` 验证 HTTPS、托盘和全局快捷键权限。它们既是可安装样例，也是新模块设计时的最小参考，不会进入底座提交。
+
+### Host SDK V3 / V4 原生能力
+
+V3 与 V4 模块在 `nativeCapabilities` 中声明最小权限。新模块或权限扩大的更新会先安装为“等待权限”，用户在模块管理页查看摘要并批准后才会激活；不声明原生能力的 V4 服务模块不需要空审批。权限缩小的更新可以复用已有批准。撤销权限会立即使会话失效，并清理模块进程、托盘和快捷键资源。
 
 - 文件：模块私有目录使用相对路径；外部文件、目录和程序只通过用户选择后生成的不透明 grant ID 访问，SDK 不返回真实路径。
 - 进程：只可打开清单允许的 URL scheme；`openPath` / `revealInFolder` 只接受本模块的可读文件 grant ID；运行程序也必须使用用户明确授权的可执行文件 grant ID。不提供 Shell、提权、环境继承或无限输出。

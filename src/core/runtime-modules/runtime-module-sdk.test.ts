@@ -3,7 +3,8 @@ import { clearLogEntries, getLogSnapshot } from "@/features/logging/log-store";
 import { decodeModuleLogRecord } from "@/features/logging/logger";
 import { setColorMode } from "@/themes/theme-store";
 import { setLocale } from "@/core/i18n/locale-store";
-import { createRuntimeModuleHostSdk } from "./runtime-module-sdk";
+import { createRuntimeModuleHostSdk, releaseRuntimeModuleHostSdk } from "./runtime-module-sdk";
+import { createRuntimeModuleServiceBus } from "./runtime-module-services";
 import type {
   InstalledRuntimeModule,
   RuntimeModuleDatabaseBackend,
@@ -103,6 +104,41 @@ describe("runtime module host SDK", () => {
     expect(native.openPath).toHaveBeenCalledWith("native-session-token", "selected-file");
     expect(native.revealInFolder).toHaveBeenCalledWith("native-session-token", "selected-file");
     expect(sdk).toHaveProperty("database");
+  });
+
+  it("exposes dependency-scoped services to Host SDK V4 and releases registrations", async () => {
+    const provider = moduleRecord();
+    provider.manifest = {
+      ...provider.manifest,
+      id: "local-notes",
+      sdkVersion: 4,
+      services: { provides: ["notes.v1"] },
+    };
+    const consumer = moduleRecord();
+    consumer.manifest = {
+      ...consumer.manifest,
+      id: "notes-dashboard",
+      sdkVersion: 4,
+      dependencies: { required: [{ id: "local-notes", version: "^2.0.0" }], optional: [] },
+    };
+    consumer.requiredDependencies = [{ id: "local-notes", version: "^2.0.0" }];
+    const native = {
+      createSession: vi.fn(async () => "native-session-token"),
+      releaseSession: vi.fn(async () => undefined),
+    } as unknown as RuntimeModuleNativeBackend;
+    const bus = createRuntimeModuleServiceBus();
+    const providerSdk = await createRuntimeModuleHostSdk(provider, undefined, native, bus);
+    const consumerSdk = await createRuntimeModuleHostSdk(consumer, undefined, native, bus);
+    if (providerSdk.sdkVersion !== 4 || consumerSdk.sdkVersion !== 4) throw new Error("expected Host SDK V4");
+
+    providerSdk.services.expose("notes.v1", { stats: () => ({ count: 2 }) });
+    await expect(consumerSdk.services.call("local-notes", "notes.v1", "stats", null))
+      .resolves.toEqual({ count: 2 });
+
+    await releaseRuntimeModuleHostSdk(providerSdk);
+    expect(consumerSdk.services.available("local-notes", "notes.v1")).toBe(false);
+    await releaseRuntimeModuleHostSdk(consumerSdk);
+    expect(native.releaseSession).toHaveBeenCalledTimes(2);
   });
 
   it("namespaces settings to the active module", async () => {

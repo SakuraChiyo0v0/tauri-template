@@ -198,7 +198,7 @@ impl ModuleStore {
             let display_sha256 = selected_sha256.clone().unwrap_or_default();
             let pending_permission = catalog.get(id).and_then(|manifests| {
                 manifests.iter().find(|candidate| {
-                    candidate.sdk_version == 3
+                    candidate.sdk_version >= 3
                         && self.permission_status(candidate)
                             == Ok(PermissionStatus::AwaitingApproval)
                 })
@@ -206,10 +206,11 @@ impl ModuleStore {
             let permission_manifest = pending_permission.unwrap_or(&manifest);
             let permission_status = self.permission_status(permission_manifest)?;
             let normalized_permissions = permission_manifest.normalized_native_capabilities()?;
-            let permission_version =
-                (permission_manifest.sdk_version == 3).then(|| permission_manifest.version.clone());
+            let permission_version = (permission_status != PermissionStatus::NotRequired)
+                .then(|| permission_manifest.version.clone());
             let native_permission_summary = normalized_permissions.summary();
-            let native_permission_fingerprint = (permission_manifest.sdk_version == 3)
+            let native_permission_fingerprint = (permission_status
+                != PermissionStatus::NotRequired)
                 .then(|| normalized_permissions.fingerprint());
             modules.push(InstalledRuntimeModule {
                 required_dependencies: manifest.dependencies.required.clone(),
@@ -255,6 +256,9 @@ impl ModuleStore {
             return Ok(PermissionStatus::NotRequired);
         }
         let requested = manifest.normalized_native_capabilities()?;
+        if requested.summary().is_empty() {
+            return Ok(PermissionStatus::NotRequired);
+        }
         Ok(
             match self.permission_store().decision(&manifest.id, &requested)? {
                 PermissionDecision::Approved => PermissionStatus::Approved,
@@ -548,13 +552,18 @@ impl ModuleStore {
                     .find(|manifest| manifest.version == version)
             })
             .ok_or_else(|| format!("module version is not installed: {module_id} {version}"))?;
-        if manifest.sdk_version != 3 {
+        if manifest.sdk_version < 3 {
             return Err(format!(
                 "module does not require native permission approval: {module_id}"
             ));
         }
-        self.permission_store()
-            .approve(module_id, &manifest.normalized_native_capabilities()?)?;
+        let requested = manifest.normalized_native_capabilities()?;
+        if requested.summary().is_empty() {
+            return Err(format!(
+                "module does not require native permission approval: {module_id}"
+            ));
+        }
+        self.permission_store().approve(module_id, &requested)?;
         let preferred = snapshot
             .plan
             .desired_enabled
@@ -1843,7 +1852,11 @@ mod tests {
             .unwrap();
         let before = store.snapshot(&[]).unwrap();
 
-        assert!(store.install(&legacy_single_language_package(temp.path())).is_err());
+        assert!(
+            store
+                .install(&legacy_single_language_package(temp.path()))
+                .is_err()
+        );
 
         let after = store.snapshot(&[]).unwrap();
         assert_eq!(after.plan.generation, before.plan.generation);
@@ -1986,10 +1999,10 @@ mod tests {
     #[test]
     #[ignore = "manual smoke: set MTP_SMOKE_PACKAGE_1 and MTP_SMOKE_PACKAGE_2 to real schema V2 package paths"]
     fn runs_the_real_package_lifecycle_smoke() {
-        let first_package = std::env::var("MTP_SMOKE_PACKAGE_1")
-            .expect("MTP_SMOKE_PACKAGE_1 is required");
-        let second_package = std::env::var("MTP_SMOKE_PACKAGE_2")
-            .expect("MTP_SMOKE_PACKAGE_2 is required");
+        let first_package =
+            std::env::var("MTP_SMOKE_PACKAGE_1").expect("MTP_SMOKE_PACKAGE_1 is required");
+        let second_package =
+            std::env::var("MTP_SMOKE_PACKAGE_2").expect("MTP_SMOKE_PACKAGE_2 is required");
         let temp = tempfile::tempdir().unwrap();
         let store = ModuleStore::new(
             temp.path().join("modules"),
@@ -2004,7 +2017,7 @@ mod tests {
             .unwrap();
         let module_id = first.manifest.id.clone();
         let first_version = first.manifest.version.clone();
-        if first.manifest.sdk_version == 3 {
+        if first.permission_status == PermissionStatus::AwaitingApproval {
             store
                 .approve_native_permissions(&module_id, &first_version)
                 .unwrap();
@@ -2032,9 +2045,81 @@ mod tests {
         );
 
         let rolled_back = store.rollback_with_plan(&module_id).unwrap();
-        assert_eq!(rolled_back.plan.selected_versions[&module_id], first_version);
+        assert_eq!(
+            rolled_back.plan.selected_versions[&module_id],
+            first_version
+        );
         let uninstalled = store.uninstall_with_plan(&module_id).unwrap();
         assert!(!uninstalled.plan.selected_versions.contains_key(&module_id));
         assert!(uninstalled.modules.is_empty());
+    }
+
+    #[test]
+    #[ignore = "manual smoke: set MTP_SMOKE_V4_CONSUMER and MTP_SMOKE_V4_PROVIDER to real SDK V4 package paths"]
+    fn runs_real_sdk_v4_dependency_smoke() {
+        let consumer =
+            std::env::var("MTP_SMOKE_V4_CONSUMER").expect("MTP_SMOKE_V4_CONSUMER is required");
+        let provider =
+            std::env::var("MTP_SMOKE_V4_PROVIDER").expect("MTP_SMOKE_V4_PROVIDER is required");
+        let temp = tempfile::tempdir().unwrap();
+        let store = ModuleStore::new(temp.path().join("modules"), Version::new(0, 2, 0));
+
+        let waiting = store.install_with_plan(Path::new(&consumer)).unwrap();
+        let dashboard = waiting
+            .modules
+            .iter()
+            .find(|module| module.manifest.id == "notes-dashboard")
+            .unwrap();
+        assert_eq!(dashboard.status, RuntimeModuleStatus::Waiting);
+        assert_eq!(dashboard.selected_version, None);
+
+        let activated = store.install_with_plan(Path::new(&provider)).unwrap();
+        assert_eq!(
+            activated.plan.activation_order,
+            vec!["local-notes", "notes-dashboard"]
+        );
+        assert!(activated.modules.iter().all(|module| {
+            module.status == RuntimeModuleStatus::Active
+                && module.permission_status == PermissionStatus::NotRequired
+        }));
+    }
+
+    #[test]
+    #[ignore = "manual smoke: set MTP_SMOKE_V4_NATIVE to a real SDK V4 native package path"]
+    fn runs_real_sdk_v4_permission_smoke() {
+        let package =
+            std::env::var("MTP_SMOKE_V4_NATIVE").expect("MTP_SMOKE_V4_NATIVE is required");
+        let temp = tempfile::tempdir().unwrap();
+        let store = ModuleStore::new(temp.path().join("modules"), Version::new(0, 2, 0));
+
+        let installed = store.install_with_plan(Path::new(&package)).unwrap();
+        let waiting = installed
+            .modules
+            .iter()
+            .find(|module| module.manifest.id == "quick-launcher")
+            .unwrap();
+        assert_eq!(waiting.status, RuntimeModuleStatus::Waiting);
+        assert_eq!(
+            waiting.permission_status,
+            PermissionStatus::AwaitingApproval
+        );
+
+        let approved = store
+            .approve_native_permissions("quick-launcher", &waiting.manifest.version)
+            .unwrap();
+        let active = approved
+            .modules
+            .iter()
+            .find(|module| module.manifest.id == "quick-launcher")
+            .unwrap();
+        assert_eq!(active.status, RuntimeModuleStatus::Active);
+        assert_eq!(active.permission_status, PermissionStatus::Approved);
+        let capabilities = active.manifest.normalized_native_capabilities().unwrap();
+        assert_eq!(
+            capabilities.process.unwrap().url_schemes,
+            vec!["https".to_string()]
+        );
+        assert_eq!(capabilities.tray[0].id, "open-current");
+        assert_eq!(capabilities.shortcuts[0].id, "launch-current");
     }
 }

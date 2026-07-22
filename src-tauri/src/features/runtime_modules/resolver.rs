@@ -431,7 +431,10 @@ mod tests {
 
     use super::{ResolveRequest, resolve};
     use crate::features::runtime_modules::{
-        manifest::{LocalizedText, RuntimeModuleDependencies, RuntimeModuleDependency, RuntimeModuleManifest},
+        manifest::{
+            LocalizedText, RuntimeModuleDependencies, RuntimeModuleDependency,
+            RuntimeModuleManifest,
+        },
         types::RuntimeModuleDiagnosticCode,
     };
 
@@ -444,7 +447,10 @@ mod tests {
         RuntimeModuleManifest {
             schema_version: 2,
             id: id.into(),
-            name: LocalizedText { zh_cn: id.into(), en: id.into() },
+            name: LocalizedText {
+                zh_cn: id.into(),
+                en: id.into(),
+            },
             description: LocalizedText {
                 zh_cn: format!("{id} 测试模块"),
                 en: format!("{id} test module"),
@@ -469,6 +475,7 @@ mod tests {
                     })
                     .collect(),
             },
+            services: Default::default(),
             navigation: Vec::new(),
             settings: Vec::new(),
             native_capabilities: Default::default(),

@@ -80,6 +80,25 @@ describe("runtime module manifest", () => {
     });
   });
 
+  it("accepts Host SDK V4 with declared services", () => {
+    expect(parseRuntimeModuleManifest({
+      ...validManifest,
+      sdkVersion: 4,
+      services: { provides: ["notes.v1"] },
+    })).toMatchObject({
+      sdkVersion: 4,
+      services: { provides: ["notes.v1"] },
+    });
+  });
+
+  it.each([
+    { name: "services on SDK V3", sdkVersion: 3, services: { provides: ["notes.v1"] } },
+    { name: "duplicate service", sdkVersion: 4, services: { provides: ["notes.v1", "notes.v1"] } },
+    { name: "invalid service id", sdkVersion: 4, services: { provides: ["Notes Service"] } },
+  ])("rejects $name", ({ sdkVersion, services }) => {
+    expect(() => parseRuntimeModuleManifest({ ...validManifest, sdkVersion, services })).toThrow(/service/i);
+  });
+
   it("rejects native capabilities on SDK V2", () => {
     expect(() => parseRuntimeModuleManifest({
       ...validManifest,

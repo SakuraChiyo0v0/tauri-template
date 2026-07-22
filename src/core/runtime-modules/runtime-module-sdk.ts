@@ -5,12 +5,14 @@ import { getThemeSnapshot, subscribeTheme } from "@/themes/theme-store";
 import { getLocaleSnapshot, subscribeLocale } from "@/core/i18n/locale-store";
 import { runtimeModuleDatabaseApi } from "./runtime-module-database-api";
 import { runtimeModuleNativeApi } from "./runtime-module-native-api";
+import { runtimeModuleServiceBus, type RuntimeModuleServiceBus } from "./runtime-module-services";
 import type {
   InstalledRuntimeModule,
   RuntimeDatabaseStatement,
   RuntimeModuleDatabaseBackend,
   RuntimeModuleHostSdk,
   RuntimeModuleHostSdkV2,
+  RuntimeModuleHostSdkV3,
   RuntimeModuleNativeBackend,
   RuntimeSqlValue,
 } from "./runtime-module-types";
@@ -19,6 +21,7 @@ const nativeSessions = new WeakMap<RuntimeModuleHostSdk, {
   backend: RuntimeModuleNativeBackend;
   token: string;
   cleanups: Set<() => void>;
+  releaseServices?: () => void;
 }>();
 
 function databaseApi(moduleId: string, backend: RuntimeModuleDatabaseBackend) {
@@ -35,6 +38,7 @@ export async function createRuntimeModuleHostSdk(
   module: InstalledRuntimeModule,
   databaseBackend: RuntimeModuleDatabaseBackend = runtimeModuleDatabaseApi,
   nativeBackend: RuntimeModuleNativeBackend = runtimeModuleNativeApi,
+  serviceBus: RuntimeModuleServiceBus = runtimeModuleServiceBus,
 ): Promise<RuntimeModuleHostSdk> {
   const moduleId = module.manifest.id;
   const base: Omit<RuntimeModuleHostSdkV2, "sdkVersion" | "database"> = {
@@ -78,9 +82,8 @@ export async function createRuntimeModuleHostSdk(
       unsubscribe();
     };
   };
-  const sdk: RuntimeModuleHostSdk = {
+  const nativeApis: Omit<RuntimeModuleHostSdkV3, "sdkVersion"> = {
     ...base,
-    sdkVersion: 3,
     database: databaseApi(moduleId, databaseBackend),
     filesystem: {
       readPrivate: (path) => nativeBackend.readPrivateFile(token, path),
@@ -113,7 +116,24 @@ export async function createRuntimeModuleHostSdk(
       onTrigger: (listener) => trackedListener(() => nativeBackend.onShortcutTrigger(moduleId, listener)),
     },
   };
-  nativeSessions.set(sdk, { backend: nativeBackend, token, cleanups });
+
+  const sdk: RuntimeModuleHostSdk = module.manifest.sdkVersion === 3
+    ? { ...nativeApis, sdkVersion: 3 }
+    : {
+        ...nativeApis,
+        sdkVersion: 4,
+        services: serviceBus.createModuleApi(
+          moduleId,
+          module.manifest.services?.provides ?? [],
+          [...module.requiredDependencies, ...module.optionalDependencies].map((dependency) => dependency.id),
+        ),
+      };
+  nativeSessions.set(sdk, {
+    backend: nativeBackend,
+    token,
+    cleanups,
+    releaseServices: sdk.sdkVersion === 4 ? () => serviceBus.releaseModule(moduleId) : undefined,
+  });
   return sdk;
 }
 
@@ -122,6 +142,7 @@ export async function releaseRuntimeModuleHostSdk(sdk: RuntimeModuleHostSdk | un
   const session = nativeSessions.get(sdk);
   if (!session) return;
   nativeSessions.delete(sdk);
+  session.releaseServices?.();
   session.cleanups.forEach((cleanup) => cleanup());
   session.cleanups.clear();
   await session.backend.releaseSession(session.token);

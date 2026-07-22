@@ -3,7 +3,7 @@ import type { NavigationGroup } from "@/core/features/feature-types";
 import { isLocalizedText, type LocalizedText } from "@/core/i18n/localized-text";
 
 export const RUNTIME_MODULE_SCHEMA_VERSION = 2;
-export const RUNTIME_MODULE_SDK_VERSION = 3;
+export const RUNTIME_MODULE_SDK_VERSION = 4;
 
 export type RuntimeExternalFileAccess = "read" | "write" | "list";
 export type RuntimeRegistryAccess = "read" | "read-write";
@@ -37,6 +37,10 @@ export interface RuntimeModuleDependencies {
   optional: RuntimeModuleDependency[];
 }
 
+export interface RuntimeModuleServicesManifest {
+  provides: string[];
+}
+
 export interface RuntimeModuleManifest {
   schemaVersion: 2;
   id: string;
@@ -44,9 +48,10 @@ export interface RuntimeModuleManifest {
   description: LocalizedText;
   version: string;
   hostVersion: string;
-  sdkVersion: 2 | 3;
+  sdkVersion: 2 | 3 | 4;
   entry: string;
   dependencies: RuntimeModuleDependencies;
+  services?: RuntimeModuleServicesManifest;
   navigation: RuntimeNavigationManifest[];
   settings: RuntimeSettingManifest[];
   nativeCapabilities?: RuntimeNativeCapabilities;
@@ -57,6 +62,7 @@ const contributionIdPattern = /^[A-Za-z][A-Za-z0-9._-]{1,63}$/;
 const semverPattern = /^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)(?:-[0-9A-Za-z.-]+)?(?:\+[0-9A-Za-z.-]+)?$/;
 const reservedModuleIds = new Set(["system", "logging"]);
 const versionRangePattern = /^[0-9A-Za-z.*<>=~^|,\s-]+$/;
+const serviceIdPattern = /^[a-z][a-z0-9]*(?:[.-][a-z0-9]+)+$/;
 
 function object(value: unknown, label: string): Record<string, unknown> {
   if (!value || typeof value !== "object" || Array.isArray(value)) throw new Error(`${label} must be an object.`);
@@ -188,6 +194,22 @@ function parseDependencies(value: unknown, moduleId: string): RuntimeModuleDepen
   };
 }
 
+function parseServices(value: unknown, sdkVersion: 2 | 3 | 4): RuntimeModuleServicesManifest {
+  if (value === undefined) return { provides: [] };
+  if (sdkVersion !== 4) throw new Error("Module services require Host SDK V4.");
+  const services = object(value, "services");
+  const unknownKey = Object.keys(services).find((key) => key !== "provides");
+  if (unknownKey || !Array.isArray(services.provides)) throw new Error("Invalid module services declaration.");
+  const seen = new Set<string>();
+  const provides = services.provides.map((value, index) => {
+    const id = string(value, `services.provides[${index}]`, 64);
+    if (!serviceIdPattern.test(id) || seen.has(id)) throw new Error(`Invalid or duplicate service id: ${id}`);
+    seen.add(id);
+    return id;
+  });
+  return { provides };
+}
+
 function parseNavigation(value: unknown, moduleId: string): RuntimeNavigationManifest[] {
   if (!Array.isArray(value)) throw new Error("navigation must be an array.");
   const ids = new Set<string>();
@@ -271,16 +293,17 @@ export function parseRuntimeModuleManifest(value: unknown): RuntimeModuleManifes
   const version = string(manifest.version, "module version", 64);
   if (!semverPattern.test(version)) throw new Error(`Invalid module version: ${version}`);
   if (manifest.schemaVersion !== RUNTIME_MODULE_SCHEMA_VERSION) throw new Error("Unsupported module schema version.");
-  if (manifest.sdkVersion !== 2 && manifest.sdkVersion !== RUNTIME_MODULE_SDK_VERSION) {
+  if (manifest.sdkVersion !== 2 && manifest.sdkVersion !== 3 && manifest.sdkVersion !== RUNTIME_MODULE_SDK_VERSION) {
     throw new Error("Unsupported module SDK version.");
   }
   const sdkVersion = manifest.sdkVersion;
   if (sdkVersion < 3 && manifest.nativeCapabilities !== undefined) {
     throw new Error("Native capabilities require Host SDK V3.");
   }
-  const nativeCapabilities = sdkVersion === 3
+  const nativeCapabilities = sdkVersion >= 3
     ? parseNativeCapabilities(manifest.nativeCapabilities ?? {})
     : undefined;
+  const services = parseServices(manifest.services, sdkVersion);
 
   const entry = string(manifest.entry, "module entry", 100);
   if (entry !== "index.js") throw new Error("Runtime module entry must be index.js.");
@@ -295,6 +318,7 @@ export function parseRuntimeModuleManifest(value: unknown): RuntimeModuleManifes
     sdkVersion,
     entry,
     dependencies: parseDependencies(manifest.dependencies, id),
+    services,
     navigation: parseNavigation(manifest.navigation ?? [], id),
     settings: parseSettings(manifest.settings ?? []),
     nativeCapabilities,

@@ -51,9 +51,9 @@ fn require_active_database_module(app: &AppHandle, module_id: &str) -> Result<()
         .iter()
         .find(|module| module.manifest.id == module_id)
         .ok_or_else(|| format!("runtime module is not installed: {module_id}"))?;
-    if module.manifest.sdk_version != 2 && module.manifest.sdk_version != 3 {
+    if !(2..=4).contains(&module.manifest.sdk_version) {
         return Err(format!(
-            "runtime module does not use Host SDK V2 or V3: {module_id}"
+            "runtime module does not use Host SDK V2, V3, or V4: {module_id}"
         ));
     }
     if module.status != RuntimeModuleStatus::Active {

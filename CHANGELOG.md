@@ -6,6 +6,9 @@
 
 ### Added
 
+- 新增 Host SDK V4 模块服务总线，服务注册受清单约束，服务调用受模块依赖约束，并在 SDK 释放时自动清理。
+- 新增受限 JSON 服务数据边界，拒绝共享函数、类实例、循环引用、危险原型键和超限数据。
+- 新增三个底座外独立验证模块：`local-notes` 服务提供者、`notes-dashboard` 依赖消费者和 `quick-launcher` 原生能力模块。
 - 新增底座级中文/英文切换、持久化语言设置和 Host SDK i18n 订阅。
 - 新增 Host SDK V3 原生能力代理，覆盖模块私有/授权文件、受控进程、Windows 注册表、统一托盘和全局快捷键。
 - 模块管理页新增原生权限摘要、批准/撤销、外部文件 grant 和快捷键冲突重新绑定。
@@ -17,6 +20,8 @@
 
 ### Changed
 
+- 运行时模块清单与安装器接受 SDK V4 和 `services.provides`；服务型 V4 模块无需为空原生权限执行审批。
+- 独立 `tauri-module-template` 升级为 Host SDK V4，并加入模块服务模拟宿主。
 - 全局快捷键重新绑定改为居中按键录制弹窗，确认前可反复录制新的组合。
 - 运行时模块清单升级为 schema V2，宿主可见文案必须同时提供 `zh-CN` 和 `en`；schema V1 与 Host SDK V1 不再支持。
 - 独立 `tauri-module-template` 保持 Host SDK V3 原生能力演示，同时升级为双语 schema V2 和可切换语言的模拟宿主。

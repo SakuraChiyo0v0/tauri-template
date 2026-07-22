@@ -142,6 +142,29 @@ export interface RuntimeModuleDatabase {
   setUserVersion(version: number): Promise<void>;
 }
 
+export type RuntimeServiceValue =
+  | null
+  | boolean
+  | number
+  | string
+  | RuntimeServiceValue[]
+  | { [key: string]: RuntimeServiceValue };
+
+export type RuntimeServiceHandler = (
+  input: RuntimeServiceValue,
+) => RuntimeServiceValue | Promise<RuntimeServiceValue>;
+
+export interface RuntimeModuleServices {
+  expose(serviceId: string, handlers: Record<string, RuntimeServiceHandler>): () => void;
+  available(providerModuleId: string, serviceId: string): boolean;
+  call<T extends RuntimeServiceValue = RuntimeServiceValue>(
+    providerModuleId: string,
+    serviceId: string,
+    method: string,
+    input?: RuntimeServiceValue,
+  ): Promise<T>;
+}
+
 export interface RuntimeFileGrant {
   id: string;
   moduleId: string;
@@ -232,8 +255,7 @@ export interface RuntimeModuleHostSdkV2 extends RuntimeModuleHostSdkBase {
   readonly database: RuntimeModuleDatabase;
 }
 
-export interface RuntimeModuleHostSdkV3 extends RuntimeModuleHostSdkBase {
-  readonly sdkVersion: 3;
+interface RuntimeModuleNativeApis {
   readonly database: RuntimeModuleDatabase;
   readonly filesystem: {
     readPrivate(path: string): Promise<number[]>;
@@ -267,7 +289,16 @@ export interface RuntimeModuleHostSdkV3 extends RuntimeModuleHostSdkBase {
   };
 }
 
-export type RuntimeModuleHostSdk = RuntimeModuleHostSdkV2 | RuntimeModuleHostSdkV3;
+export interface RuntimeModuleHostSdkV3 extends RuntimeModuleHostSdkBase, RuntimeModuleNativeApis {
+  readonly sdkVersion: 3;
+}
+
+export interface RuntimeModuleHostSdkV4 extends RuntimeModuleHostSdkBase, RuntimeModuleNativeApis {
+  readonly sdkVersion: 4;
+  readonly services: RuntimeModuleServices;
+}
+
+export type RuntimeModuleHostSdk = RuntimeModuleHostSdkV2 | RuntimeModuleHostSdkV3 | RuntimeModuleHostSdkV4;
 
 export interface ModuleDataInventoryItem {
   moduleId: string;
