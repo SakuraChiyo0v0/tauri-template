@@ -40,9 +40,34 @@ describe("runtime module manifest", () => {
     });
   });
 
-  it("accepts Host SDK V2 and rejects unsupported newer versions", () => {
+  it("accepts Host SDK V1, V2, and V3 while rejecting unsupported newer versions", () => {
     expect(parseRuntimeModuleManifest({ ...validManifest, sdkVersion: 2 }).sdkVersion).toBe(2);
-    expect(() => parseRuntimeModuleManifest({ ...validManifest, sdkVersion: 3 })).toThrow(/SDK version/i);
+    expect(parseRuntimeModuleManifest({
+      ...validManifest,
+      sdkVersion: 3,
+      nativeCapabilities: {
+        filesystem: { private: true, external: ["read"] },
+        process: { urlSchemes: ["https"], executableGrants: false },
+        registry: [],
+        tray: [],
+        shortcuts: [],
+      },
+    })).toMatchObject({
+      sdkVersion: 3,
+      nativeCapabilities: {
+        filesystem: { private: true, external: ["read"] },
+        process: { urlSchemes: ["https"], executableGrants: false },
+      },
+    });
+    expect(() => parseRuntimeModuleManifest({ ...validManifest, sdkVersion: 4 })).toThrow(/SDK version/i);
+  });
+
+  it("rejects native capabilities on older SDK versions", () => {
+    expect(() => parseRuntimeModuleManifest({
+      ...validManifest,
+      sdkVersion: 2,
+      nativeCapabilities: { filesystem: { private: true, external: [] } },
+    })).toThrow(/native capabilities/i);
   });
 
   it("treats a legacy manifest without dependencies as dependency-free", () => {

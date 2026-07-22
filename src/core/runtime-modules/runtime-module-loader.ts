@@ -4,7 +4,7 @@ import { clearLegacyFeatureState, getLegacyDisabledFeatureIds } from "@/core/fea
 import { defineFeature, type FeatureModule } from "@/core/features/feature-types";
 import { parseRuntimeModuleManifest } from "./runtime-manifest";
 import { runtimeModuleApi, type RuntimeModuleApi } from "./runtime-module-api";
-import { createRuntimeModuleHostSdk } from "./runtime-module-sdk";
+import { createRuntimeModuleHostSdk, releaseRuntimeModuleHostSdk } from "./runtime-module-sdk";
 import { createRuntimeModulePage } from "./runtime-module-page";
 import type {
   InstalledRuntimeModule,
@@ -23,7 +23,8 @@ export interface RuntimeRecoveryState {
 export interface RuntimeModuleLoaderDependencies {
   backend: LoaderBackend;
   importSource(source: string, moduleId: string, version: string): Promise<RuntimeModuleExports>;
-  createHostSdk(module: InstalledRuntimeModule): RuntimeModuleHostSdk;
+  createHostSdk(module: InstalledRuntimeModule): RuntimeModuleHostSdk | Promise<RuntimeModuleHostSdk>;
+  releaseHostSdk(sdk: RuntimeModuleHostSdk | undefined): void | Promise<void>;
   elementRegistry: Pick<CustomElementRegistry, "get">;
   reload(): void;
   recoveryState: RuntimeRecoveryState;
@@ -57,6 +58,7 @@ export function createDefaultRuntimeModuleLoaderDependencies(): RuntimeModuleLoa
     backend: runtimeModuleApi,
     importSource: importModuleSource,
     createHostSdk: createRuntimeModuleHostSdk,
+    releaseHostSdk: releaseRuntimeModuleHostSdk,
     elementRegistry: customElements,
     reload: () => location.reload(),
     recoveryState: browserRecoveryState(),
@@ -64,6 +66,11 @@ export function createDefaultRuntimeModuleLoaderDependencies(): RuntimeModuleLoa
     clearLegacyModuleState: clearLegacyFeatureState,
   };
 }
+
+const activatedSdks = new WeakMap<RuntimeModuleExports, {
+  sdk: RuntimeModuleHostSdk;
+  release: RuntimeModuleLoaderDependencies["releaseHostSdk"];
+}>();
 
 function errorMessage(error: unknown) {
   return error instanceof Error ? error.message : String(error);
@@ -85,15 +92,23 @@ export async function activateRuntimeModule(
     throw new Error(`模块 ${manifest.id}@${manifest.version} 未导出 activate(hostSdk)。`);
   }
 
-  await exports.activate(dependencies.createHostSdk(module));
+  const hostSdk = await dependencies.createHostSdk(module);
+  try {
+    await exports.activate(hostSdk);
+  } catch (error) {
+    await dependencies.releaseHostSdk(hostSdk);
+    throw error;
+  }
   const missingElements = manifest.navigation
     .map((navigation) => navigation.element)
     .filter((elementName) => !dependencies.elementRegistry.get(elementName));
   if (missingElements.length > 0) {
+    await dependencies.releaseHostSdk(hostSdk);
     throw new Error(`模块激活后缺少自定义元素：${missingElements.join(", ")}`);
   }
 
   dependencies.recoveryState.clear(manifest.id);
+  activatedSdks.set(exports, { sdk: hostSdk, release: dependencies.releaseHostSdk });
   return exports;
 }
 
@@ -129,9 +144,20 @@ export function createRuntimeFeature(
     async teardown() {
       const current = activeExports;
       activeExports = undefined;
-      await current?.deactivate?.();
+      try {
+        await current?.deactivate?.();
+      } finally {
+        await dependenciesForExports(current);
+      }
     },
   });
+
+  async function dependenciesForExports(exports: RuntimeModuleExports | undefined) {
+    if (!exports) return;
+    const active = activatedSdks.get(exports);
+    activatedSdks.delete(exports);
+    await active?.release(active.sdk);
+  }
 }
 
 function createDiagnosticFeature(module: InstalledRuntimeModule): FeatureModule {

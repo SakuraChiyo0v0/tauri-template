@@ -1,7 +1,7 @@
 import { useEffect, useState, useSyncExternalStore } from "react";
 import { isTauri } from "@tauri-apps/api/core";
 import { open } from "@tauri-apps/plugin-dialog";
-import { AlertCircle, Boxes, Database, PackagePlus, Power, RotateCcw, Trash2 } from "lucide-react";
+import { AlertCircle, Boxes, Database, FolderKey, Keyboard, PackagePlus, Power, RotateCcw, ShieldCheck, Trash2 } from "lucide-react";
 import { featureRegistry } from "@/app/feature-registry";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -10,7 +10,12 @@ import { Switch } from "@/components/ui/switch";
 import { runtimeModuleApi } from "@/core/runtime-modules/runtime-module-api";
 import { canClearModuleData, formatModuleDataSize, orphanedModuleData } from "@/core/runtime-modules/runtime-module-data";
 import { getModuleManagementState } from "@/core/runtime-modules/runtime-module-management";
-import type { ModuleDataInventoryItem, RuntimeModuleOperationResult } from "@/core/runtime-modules/runtime-module-types";
+import type {
+  ModuleDataInventoryItem,
+  RuntimeFileGrant,
+  RuntimeModuleOperationResult,
+  RuntimeShortcutStatus,
+} from "@/core/runtime-modules/runtime-module-types";
 
 function messageOf(error: unknown) {
   if (error && typeof error === "object" && "kind" in error) {
@@ -31,6 +36,8 @@ export function ModuleManagerPage() {
   const [busyAction, setBusyAction] = useState<string | null>(null);
   const [feedback, setFeedback] = useState<string | null>(null);
   const [moduleData, setModuleData] = useState<ModuleDataInventoryItem[]>([]);
+  const [grantsByModule, setGrantsByModule] = useState<Record<string, RuntimeFileGrant[]>>({});
+  const [shortcutsByModule, setShortcutsByModule] = useState<Record<string, RuntimeShortcutStatus[]>>({});
   const features = featureRegistry.getManageable();
   const runtimeFeatureIds = new Set(features.filter((feature) => feature.runtime).map((feature) => feature.id));
   const dataByModule = new Map(moduleData.map((item) => [item.moduleId, item]));
@@ -42,12 +49,27 @@ export function ModuleManagerPage() {
       .catch((error) => setFeedback(messageOf(error)));
   }, []);
 
+  useEffect(() => {
+    const modules = featureRegistry.getManageable()
+      .filter((feature) => feature.runtime?.permissionStatus === "approved" && feature.runtime.status === "active");
+    void Promise.all(modules.map(async (feature) => {
+      const [grants, shortcuts] = await Promise.all([
+        runtimeModuleApi.listFileGrants(feature.id).catch(() => []),
+        runtimeModuleApi.listShortcuts(feature.id).catch(() => []),
+      ]);
+      return [feature.id, grants, shortcuts] as const;
+    })).then((details) => {
+      setGrantsByModule(Object.fromEntries(details.map(([id, grants]) => [id, grants])));
+      setShortcutsByModule(Object.fromEntries(details.map(([id, , shortcuts]) => [id, shortcuts])));
+    });
+  }, []);
+
   const runReloadingAction = async (actionId: string, action: () => Promise<RuntimeModuleOperationResult>) => {
     setBusyAction(actionId);
     setFeedback(null);
     try {
       const result = await action();
-      if (result.planChanged) {
+      if (result.planChanged || result.packageInstalled) {
         location.reload();
         return;
       }
@@ -90,6 +112,68 @@ export function ModuleManagerPage() {
       setFeedback(messageOf(error));
     } finally {
       setBusyAction(null);
+    }
+  };
+
+  const createFileGrant = async (moduleId: string, kind: RuntimeFileGrant["kind"]) => {
+    if (!isTauri()) return setFeedback("文件授权只能在 Tauri 桌面应用中执行。");
+    const runtime = featureRegistry.getAll().find((feature) => feature.id === moduleId)?.runtime;
+    const capabilities = runtime?.manifest.nativeCapabilities;
+    const external = capabilities?.filesystem?.external ?? [];
+    const path = await open({ multiple: false, directory: kind === "directory" });
+    if (typeof path !== "string") return;
+    const access = kind === "executable"
+      ? { read: false, write: false, list: false, execute: true }
+      : kind === "directory"
+        ? { read: external.includes("read"), write: false, list: true, execute: false }
+        : { read: external.includes("read"), write: external.includes("write"), list: false, execute: false };
+    setBusyAction(`grant:${moduleId}`);
+    try {
+      await runtimeModuleApi.createFileGrant(moduleId, path, kind, access);
+      const grants = await runtimeModuleApi.listFileGrants(moduleId);
+      setGrantsByModule((current) => ({ ...current, [moduleId]: grants }));
+      setFeedback("文件授权已保存，模块只会收到不透明授权编号。");
+    } catch (error) {
+      setFeedback(messageOf(error));
+    } finally {
+      setBusyAction(null);
+    }
+  };
+
+  const revokeFileGrant = async (moduleId: string, grantId: string) => {
+    setBusyAction(`grant:${moduleId}`);
+    try {
+      await runtimeModuleApi.revokeFileGrant(moduleId, grantId);
+      setGrantsByModule((current) => ({
+        ...current,
+        [moduleId]: (current[moduleId] ?? []).filter((grant) => grant.id !== grantId),
+      }));
+    } catch (error) {
+      setFeedback(messageOf(error));
+    } finally {
+      setBusyAction(null);
+    }
+  };
+
+  const rebindShortcut = async (moduleId: string, shortcut: RuntimeShortcutStatus) => {
+    const accelerator = prompt("输入新的全局快捷键，例如 Ctrl+Shift+Y", shortcut.accelerator ?? "");
+    if (!accelerator) return;
+    try {
+      const shortcuts = await runtimeModuleApi.rebindShortcut(moduleId, shortcut.shortcutId, accelerator);
+      setShortcutsByModule((current) => ({ ...current, [moduleId]: shortcuts }));
+      setFeedback("快捷键已重新绑定。");
+    } catch (error) {
+      setFeedback(messageOf(error));
+    }
+  };
+
+  const disableShortcut = async (moduleId: string, shortcutId: string) => {
+    try {
+      const shortcuts = await runtimeModuleApi.disableShortcut(moduleId, shortcutId);
+      setShortcutsByModule((current) => ({ ...current, [moduleId]: shortcuts }));
+      setFeedback("快捷键已禁用。");
+    } catch (error) {
+      setFeedback(messageOf(error));
     }
   };
 
@@ -177,6 +261,81 @@ export function ModuleManagerPage() {
                   <div><span className="text-muted-foreground">必需依赖</span><p className="mt-1 break-words">{state.requiredDependencies.join("、") || "无"}</p></div>
                   <div><span className="text-muted-foreground">可选依赖</span><p className="mt-1 break-words">{state.optionalDependencies.join("、") || "无"}</p></div>
                   <div><span className="text-muted-foreground">依赖者</span><p className="mt-1 break-words">{state.dependents.join("、") || "无"}</p></div>
+                </div>
+              )}
+
+              {runtime && (runtime.manifest.sdkVersion === 3 || runtime.permissionStatus !== "not_required") && (
+                <div className="mx-5 mb-4 space-y-3 rounded-lg border border-border p-3 text-xs">
+                  <div className="flex flex-wrap items-center justify-between gap-2">
+                    <p className="flex items-center gap-1.5 font-medium"><ShieldCheck className="size-4 text-primary" />原生能力</p>
+                    <div className="flex gap-2">
+                      {state.canApprovePermissions && state.permissionVersion && (
+                        <Button
+                          size="sm"
+                          disabled={busyAction !== null}
+                          onClick={() => {
+                            if (!confirm(`批准 ${feature.name} v${state.permissionVersion} 请求的原生能力？`)) return;
+                            void runReloadingAction(`approve:${feature.id}`, () => runtimeModuleApi.approveNativePermissions(feature.id, state.permissionVersion as string));
+                          }}
+                        >批准并启用</Button>
+                      )}
+                      {state.canRevokePermissions && (
+                        <Button
+                          variant="outline"
+                          size="sm"
+                          disabled={busyAction !== null}
+                          onClick={() => {
+                            if (!confirm(`撤销 ${feature.name} 的全部原生能力？模块会停止运行。`)) return;
+                            void runReloadingAction(`revoke:${feature.id}`, () => runtimeModuleApi.revokeNativePermissions(feature.id));
+                          }}
+                        >撤销权限</Button>
+                      )}
+                    </div>
+                  </div>
+                  <div className="space-y-1 text-muted-foreground">
+                    {state.permissionSummary.length > 0
+                      ? state.permissionSummary.map((line) => <p key={line}>· {line}</p>)
+                      : <p>此模块没有声明原生能力。</p>}
+                  </div>
+
+                  {state.canRevokePermissions && (
+                    <div className="space-y-2 border-t border-border pt-3">
+                      <div className="flex flex-wrap items-center gap-2">
+                        <FolderKey className="size-4 text-primary" />
+                        {runtime.manifest.nativeCapabilities?.filesystem?.external.some((access) => access === "read" || access === "write") && (
+                          <Button variant="outline" size="sm" onClick={() => void createFileGrant(feature.id, "file")}>授权文件</Button>
+                        )}
+                        {runtime.manifest.nativeCapabilities?.filesystem?.external.includes("list") && (
+                          <Button variant="outline" size="sm" onClick={() => void createFileGrant(feature.id, "directory")}>授权目录</Button>
+                        )}
+                        {runtime.manifest.nativeCapabilities?.process?.executableGrants && (
+                          <Button variant="outline" size="sm" onClick={() => void createFileGrant(feature.id, "executable")}>授权程序</Button>
+                        )}
+                      </div>
+                      {(grantsByModule[feature.id] ?? []).map((grant) => (
+                        <div key={grant.id} className="flex items-center justify-between gap-2 rounded-md bg-muted/50 px-2 py-1.5">
+                          <span>{grant.displayName} · {grant.kind}</span>
+                          <Button variant="ghost" size="sm" onClick={() => void revokeFileGrant(feature.id, grant.id)}>撤销</Button>
+                        </div>
+                      ))}
+                      {(shortcutsByModule[feature.id] ?? []).length > 0 && (
+                        <div className="space-y-1 border-t border-border pt-2">
+                          <p className="flex items-center gap-1.5 font-medium"><Keyboard className="size-4 text-primary" />全局快捷键</p>
+                          {(shortcutsByModule[feature.id] ?? []).map((shortcut) => (
+                            <div key={shortcut.shortcutId} className="flex items-center justify-between gap-2 rounded-md bg-muted/50 px-2 py-1.5">
+                              <span>{shortcut.shortcutId} · {shortcut.accelerator ?? "已禁用"} · {shortcut.state === "conflict" ? "冲突" : shortcut.state === "registered" ? "已注册" : "已禁用"}</span>
+                              <div className="flex items-center gap-1">
+                                <Button variant="ghost" size="sm" onClick={() => void rebindShortcut(feature.id, shortcut)}>重新绑定</Button>
+                                {shortcut.state !== "disabled" && (
+                                  <Button variant="ghost" size="sm" onClick={() => void disableShortcut(feature.id, shortcut.shortcutId)}>禁用</Button>
+                                )}
+                              </div>
+                            </div>
+                          ))}
+                        </div>
+                      )}
+                    </div>
+                  )}
                 </div>
               )}
 

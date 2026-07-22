@@ -39,6 +39,10 @@ function feature(overrides: Partial<RegisteredFeature> = {}): RegisteredFeature 
       activeSha256: "abc",
       blockedVersion: null,
       lastError: null,
+      permissionStatus: "not_required",
+      permissionVersion: null,
+      nativePermissionSummary: [],
+      nativePermissionFingerprint: null,
     },
     ...overrides,
   };
@@ -117,5 +121,41 @@ describe("module management state", () => {
       requiredDependencies: ["data-provider ^1.0.0"],
       dependents: ["report-consumer"],
     });
+  });
+
+  it("shows a reviewable permission summary and the correct approval action", () => {
+    const module = feature();
+    const state = getModuleManagementState(feature({
+      runtime: {
+        ...module.runtime!,
+        selectedVersion: null,
+        status: "waiting",
+        permissionStatus: "awaiting_approval",
+        permissionVersion: "2.0.0",
+        nativePermissionSummary: ["模块私有文件", "打开 URL: https"],
+        nativePermissionFingerprint: "permission-fingerprint",
+      },
+    }), false);
+
+    expect(state).toMatchObject({
+      statusLabel: "等待权限",
+      permissionSummary: ["模块私有文件", "打开 URL: https"],
+      canApprovePermissions: true,
+      canRevokePermissions: false,
+      permissionVersion: "2.0.0",
+    });
+  });
+
+  it("allows approved V3 permissions to be revoked", () => {
+    const module = feature();
+    const state = getModuleManagementState(feature({
+      runtime: {
+        ...module.runtime!,
+        permissionStatus: "approved",
+        permissionVersion: "1.0.0",
+      },
+    }), true);
+
+    expect(state).toMatchObject({ canApprovePermissions: false, canRevokePermissions: true });
   });
 });

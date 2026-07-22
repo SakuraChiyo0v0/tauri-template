@@ -56,6 +56,10 @@ function installedModule(): InstalledRuntimeModule {
     activeSha256: "abc123",
     blockedVersion: null,
     lastError: null,
+    permissionStatus: "not_required",
+    permissionVersion: null,
+    nativePermissionSummary: [],
+    nativePermissionFingerprint: null,
   };
 }
 
@@ -124,6 +128,7 @@ function dependencies(overrides: Partial<RuntimeModuleLoaderDependencies> = {}):
     },
     importSource: vi.fn(async () => ({ activate: vi.fn() })),
     createHostSdk: vi.fn(() => sdk()),
+    releaseHostSdk: vi.fn(async () => undefined),
     elementRegistry: { get: vi.fn(() => class extends HTMLElement {}) },
     reload: vi.fn(),
     recoveryState: {
@@ -170,6 +175,21 @@ describe("runtime module loader", () => {
     const deps = dependencies({ elementRegistry: { get: vi.fn(() => undefined) } });
 
     await expect(activateRuntimeModule(installedModule(), deps)).rejects.toThrow(/hello-module-page/);
+    expect(deps.releaseHostSdk).toHaveBeenCalledTimes(1);
+  });
+
+  it("releases the native session after runtime feature teardown", async () => {
+    const deactivate = vi.fn();
+    const deps = dependencies({
+      importSource: vi.fn(async () => ({ activate: vi.fn(), deactivate })),
+    });
+    const registry = new FeatureRegistry();
+    await discoverRuntimeModules(registry, deps);
+
+    registry.unregister("hello-module");
+
+    await vi.waitFor(() => expect(deactivate).toHaveBeenCalledTimes(1));
+    expect(deps.releaseHostSdk).toHaveBeenCalledTimes(1);
   });
 
   it("rejects an entry without activate(hostSdk)", async () => {
@@ -239,6 +259,41 @@ describe("runtime module loader", () => {
 
     expect(readEntry).not.toHaveBeenCalled();
     expect(registry.getManageable()[0].runtime?.status).toBe("waiting");
+  });
+
+  it("does not create a session or execute an unapproved V3 module", async () => {
+    const waiting = {
+      ...installedModule(),
+      manifest: {
+        ...installedModule().manifest,
+        sdkVersion: 3 as const,
+        nativeCapabilities: {
+          filesystem: { private: true, external: [] },
+          process: null,
+          registry: [],
+          tray: [],
+          shortcuts: [],
+        },
+      },
+      selectedVersion: null,
+      selectedSha256: null,
+      status: "waiting" as const,
+      permissionStatus: "awaiting_approval" as const,
+    };
+    const readEntry = vi.fn();
+    const createHostSdk = vi.fn();
+
+    await discoverRuntimeModules(new FeatureRegistry(), dependencies({
+      backend: {
+        list: vi.fn(async () => snapshot([waiting], [])),
+        readEntry,
+        reportActivationFailure: vi.fn(),
+      },
+      createHostSdk,
+    }));
+
+    expect(readEntry).not.toHaveBeenCalled();
+    expect(createHostSdk).not.toHaveBeenCalled();
   });
 
   it("skips failed provider dependents but continues an independent branch", async () => {
@@ -311,6 +366,7 @@ describe("runtime module loader", () => {
     await discoverRuntimeModules(registry, deps);
 
     expect(reportActivationFailure).toHaveBeenCalledWith("hello-module", "1.0.0", expect.stringContaining("boom"));
+    expect(deps.releaseHostSdk).toHaveBeenCalledTimes(1);
     expect(recoveryState.set).toHaveBeenCalledWith("hello-module", "1.0.0");
     expect(reload).toHaveBeenCalledTimes(1);
     expect(registry.getNavigation()).toEqual([]);

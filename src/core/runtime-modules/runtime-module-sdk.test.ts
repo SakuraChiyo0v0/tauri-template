@@ -3,7 +3,12 @@ import { clearLogEntries, getLogSnapshot } from "@/features/logging/log-store";
 import { decodeModuleLogRecord } from "@/features/logging/logger";
 import { setColorMode } from "@/themes/theme-store";
 import { createRuntimeModuleHostSdk } from "./runtime-module-sdk";
-import type { InstalledRuntimeModule, RuntimeModuleDatabaseBackend, RuntimeSqlValue } from "./runtime-module-types";
+import type {
+  InstalledRuntimeModule,
+  RuntimeModuleDatabaseBackend,
+  RuntimeModuleNativeBackend,
+  RuntimeSqlValue,
+} from "./runtime-module-types";
 
 function moduleRecord(): InstalledRuntimeModule {
   return {
@@ -35,12 +40,16 @@ function moduleRecord(): InstalledRuntimeModule {
     activeSha256: "abc",
     blockedVersion: null,
     lastError: null,
+    permissionStatus: "not_required",
+    permissionVersion: null,
+    nativePermissionSummary: [],
+    nativePermissionFingerprint: null,
   };
 }
 
 describe("runtime module host SDK", () => {
-  it("keeps database capability absent from Host SDK V1", () => {
-    expect(createRuntimeModuleHostSdk(moduleRecord())).not.toHaveProperty("database");
+  it("keeps database capability absent from Host SDK V1", async () => {
+    expect(await createRuntimeModuleHostSdk(moduleRecord())).not.toHaveProperty("database");
   });
 
   it("provides namespaced database operations to Host SDK V2", async () => {
@@ -58,7 +67,7 @@ describe("runtime module host SDK", () => {
       setUserVersion: vi.fn(async () => undefined),
     };
 
-    const sdk = createRuntimeModuleHostSdk(module, database);
+    const sdk = await createRuntimeModuleHostSdk(module, database);
     if (sdk.sdkVersion !== 2) throw new Error("expected Host SDK V2");
     await sdk.database.execute("INSERT INTO notes(title) VALUES (?1)", ["hello"]);
     await sdk.database.select("SELECT title FROM notes");
@@ -67,8 +76,41 @@ describe("runtime module host SDK", () => {
     expect(select).toHaveBeenCalledWith("sdk-test-module", "SELECT title FROM notes", []);
   });
 
-  it("namespaces settings to the active module", () => {
-    const sdk = createRuntimeModuleHostSdk(moduleRecord());
+  it("creates a version-bound session and exposes database plus native APIs to Host SDK V3", async () => {
+    const module = moduleRecord();
+    module.manifest = {
+      ...module.manifest,
+      sdkVersion: 3,
+      nativeCapabilities: {
+        filesystem: { private: true, external: [] },
+        process: null,
+        registry: [],
+        tray: [],
+        shortcuts: [],
+      },
+    };
+    const native: RuntimeModuleNativeBackend = {
+      createSession: vi.fn(async () => "native-session-token"),
+      readPrivateFile: vi.fn(async () => [1, 2, 3]),
+      openPath: vi.fn(async () => undefined),
+      revealInFolder: vi.fn(async () => undefined),
+    } as unknown as RuntimeModuleNativeBackend;
+
+    const sdk = await createRuntimeModuleHostSdk(module, undefined, native);
+    if (sdk.sdkVersion !== 3) throw new Error("expected Host SDK V3");
+    await sdk.filesystem.readPrivate("notes/data.bin");
+    await sdk.process.openPath("selected-file");
+    await sdk.process.revealInFolder("selected-file");
+
+    expect(native.createSession).toHaveBeenCalledWith("sdk-test-module", "2.1.0");
+    expect(native.readPrivateFile).toHaveBeenCalledWith("native-session-token", "notes/data.bin");
+    expect(native.openPath).toHaveBeenCalledWith("native-session-token", "selected-file");
+    expect(native.revealInFolder).toHaveBeenCalledWith("native-session-token", "selected-file");
+    expect(sdk).toHaveProperty("database");
+  });
+
+  it("namespaces settings to the active module", async () => {
+    const sdk = await createRuntimeModuleHostSdk(moduleRecord());
 
     sdk.settings.set("greeting", "hello");
 
@@ -78,8 +120,8 @@ describe("runtime module host SDK", () => {
     });
   });
 
-  it("delivers theme changes to subscribers", () => {
-    const sdk = createRuntimeModuleHostSdk(moduleRecord());
+  it("delivers theme changes to subscribers", async () => {
+    const sdk = await createRuntimeModuleHostSdk(moduleRecord());
     const listener = vi.fn();
     const unsubscribe = sdk.theme.subscribe(listener);
 
@@ -91,7 +133,7 @@ describe("runtime module host SDK", () => {
 
   it("writes module logs using the module id as source", async () => {
     clearLogEntries();
-    const sdk = createRuntimeModuleHostSdk(moduleRecord());
+    const sdk = await createRuntimeModuleHostSdk(moduleRecord());
 
     await sdk.logger.info("hello from module");
 

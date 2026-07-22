@@ -47,7 +47,7 @@ pnpm tauri build
 - `features` 保存可从源码添加或移除的功能模块。
 - `App` 只渲染模块贡献的侧边栏和页面，不直接依赖具体功能。
 - `SettingsPage` 不感知具体模块；模块通过清单贡献设置。
-- 运行时模块通过用户主动选择的本地 `.mtp` 包安装；首版不提供远程下载、插件市场、动态 Rust 或额外系统权限。
+- 运行时模块通过用户主动选择的本地 `.mtp` 包安装；不提供远程下载、插件市场、动态 Rust 或任意原生访问。
 
 ## 添加源码模块
 
@@ -90,11 +90,22 @@ export const exampleFeature = defineFeature({
 
 ## 添加可独立更新的运行时模块
 
-运行时模块在独立的 `tauri-module-template` 工作区开发，不应复制到底座仓库或注册到 `src/app/module-registry.ts`。该模板提供 Host SDK V2 类型、浏览器模拟宿主、测试、单文件 ESM 构建和 `.mtp` 打包工具。
+运行时模块在独立的 `tauri-module-template` 工作区开发，不应复制到底座仓库或注册到 `src/app/module-registry.ts`。该模板提供 Host SDK V3 类型、浏览器模拟宿主、测试、单文件 ESM 构建和 `.mtp` 打包工具。
 
 需要结构化持久化的模块应声明 Host SDK V2。底座为每个 V2 模块创建隔离的 SQLite 数据库，并通过参数化查询、执行、事务和 schema 版本接口访问；模块不能指定数据库路径、附加其他数据库或直接查询其他模块的数据。普通卸载保留数据库，停用模块后可在“模块管理”中显式清理。
 
 模块使用的 npm 库必须打包进 `index.js`；只有对其他已安装 `.mtp` 模块的要求才写入 `manifest.json` 的 `dependencies.required` 或 `dependencies.optional`。必需依赖缺失或版本不兼容时，包仍会保留，但模块会等待而不会执行；可选依赖不会阻止模块启动。依赖仅约束兼容版本与激活顺序，不允许直接导入其他模块源码或调用其内部实现。
+
+### Host SDK V3 原生能力
+
+V3 模块在 `nativeCapabilities` 中声明最小权限。新模块或权限扩大的更新会先安装为“等待权限”，用户在模块管理页查看摘要并批准后才会激活；权限缩小的更新可以复用已有批准。撤销权限会立即使会话失效，并清理模块进程、托盘和快捷键资源。
+
+- 文件：模块私有目录使用相对路径；外部文件、目录和程序只通过用户选择后生成的不透明 grant ID 访问，SDK 不返回真实路径。
+- 进程：只可打开清单允许的 URL scheme；`openPath` / `revealInFolder` 只接受本模块的可读文件 grant ID；运行程序也必须使用用户明确授权的可执行文件 grant ID。不提供 Shell、提权、环境继承或无限输出。
+- 注册表：Windows 下仅允许清单前缀内的 HKCU 读写与 HKLM 只读；其他平台返回 `unsupported_platform`。
+- 托盘与快捷键：模块只声明自己的菜单项和快捷键，由底座统一仲裁、路由和清理。
+
+安全边界针对用户主动安装、可信但可能有缺陷的本地模块。所有模块仍运行在共享 WebView 中，因此 V3 不是恶意 JavaScript 沙箱；不要安装来源不可信的 `.mtp`。Host SDK 不暴露内部 store、原始 `invoke`、任意文件路径或动态 Rust。
 
 ```powershell
 cd ..\tauri-module-template

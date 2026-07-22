@@ -189,7 +189,14 @@ impl ModuleDatabaseManager {
             .ok_or_else(|| "module database path has no parent".to_string())?;
         match fs::remove_dir(directory) {
             Ok(()) => Ok(()),
-            Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(()),
+            Err(error)
+                if matches!(
+                    error.kind(),
+                    std::io::ErrorKind::NotFound | std::io::ErrorKind::DirectoryNotEmpty
+                ) =>
+            {
+                Ok(())
+            }
             Err(error) => Err(format!("remove module data directory: {error}")),
         }
     }
@@ -590,6 +597,11 @@ mod tests {
         manager
             .execute("orphan-module", "CREATE TABLE records (value TEXT)", &[])
             .unwrap();
+        let private_file = temp
+            .path()
+            .join("data/orphan-module/files/verification/activation.txt");
+        fs::create_dir_all(private_file.parent().unwrap()).unwrap();
+        fs::write(&private_file, b"Host SDK V3").unwrap();
 
         let installed = HashSet::from(["kept-module".to_string()]);
         let inventory = manager.inventory(&installed).unwrap();
@@ -611,6 +623,7 @@ mod tests {
         assert!(manager.clear("kept-module", true).is_err());
         manager.clear("orphan-module", false).unwrap();
         assert!(!manager.database_path("orphan-module").unwrap().exists());
+        assert_eq!(fs::read(private_file).unwrap(), b"Host SDK V3");
         assert!(manager.database_path("kept-module").unwrap().exists());
     }
 

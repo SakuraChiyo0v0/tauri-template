@@ -4,6 +4,8 @@ import type {
   ModuleDataInventoryItem,
   RuntimeModuleOperationResult,
   RuntimeModulePlanSnapshot,
+  RuntimeFileGrant,
+  RuntimeShortcutStatus,
 } from "./runtime-module-types";
 
 function requireTauri() {
@@ -31,6 +33,51 @@ export const runtimeModuleApi = {
   async install(packagePath: string): Promise<RuntimeModuleOperationResult> {
     requireTauri();
     return invoke("install_runtime_module", { packagePath });
+  },
+
+  async approveNativePermissions(moduleId: string, version: string): Promise<RuntimeModuleOperationResult> {
+    requireTauri();
+    return invoke("approve_runtime_module_native_permissions", { moduleId, version });
+  },
+
+  async revokeNativePermissions(moduleId: string): Promise<RuntimeModuleOperationResult> {
+    requireTauri();
+    return invoke("revoke_runtime_module_native_permissions", { moduleId });
+  },
+
+  async listFileGrants(moduleId: string): Promise<RuntimeFileGrant[]> {
+    requireTauri();
+    return invoke("list_runtime_module_native_file_grants", { moduleId });
+  },
+
+  async createFileGrant(
+    moduleId: string,
+    path: string,
+    kind: RuntimeFileGrant["kind"],
+    access: RuntimeFileGrant["access"],
+  ): Promise<RuntimeFileGrant> {
+    requireTauri();
+    return invoke("create_runtime_module_file_grant", { moduleId, path, kind, access });
+  },
+
+  async revokeFileGrant(moduleId: string, grantId: string): Promise<void> {
+    requireTauri();
+    return invoke("revoke_runtime_module_admin_file_grant", { moduleId, grantId });
+  },
+
+  async listShortcuts(moduleId: string): Promise<RuntimeShortcutStatus[]> {
+    requireTauri();
+    return invoke("list_runtime_module_shortcut_statuses", { moduleId });
+  },
+
+  async rebindShortcut(moduleId: string, shortcutId: string, accelerator: string): Promise<RuntimeShortcutStatus[]> {
+    requireTauri();
+    return invoke("rebind_runtime_module_shortcut", { moduleId, shortcutId, accelerator });
+  },
+
+  async disableShortcut(moduleId: string, shortcutId: string): Promise<RuntimeShortcutStatus[]> {
+    requireTauri();
+    return invoke("disable_runtime_module_shortcut", { moduleId, shortcutId });
   },
 
   async readEntry(moduleId: string): Promise<RuntimeModuleEntry> {

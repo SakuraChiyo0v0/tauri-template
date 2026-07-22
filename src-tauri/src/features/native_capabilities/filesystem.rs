@@ -31,6 +31,7 @@ pub struct GrantAccess {
 }
 
 impl GrantAccess {
+    #[cfg(test)]
     pub fn read_write() -> Self {
         Self {
             read: true,
@@ -40,21 +41,13 @@ impl GrantAccess {
         }
     }
 
+    #[cfg(test)]
     pub fn execute() -> Self {
         Self {
             read: false,
             write: false,
             list: false,
             execute: true,
-        }
-    }
-
-    pub fn read_list() -> Self {
-        Self {
-            read: true,
-            write: false,
-            list: true,
-            execute: false,
         }
     }
 }
@@ -68,6 +61,28 @@ pub struct FileGrant {
     pub kind: GrantKind,
     pub access: GrantAccess,
     path: PathBuf,
+}
+
+#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct FileGrantSummary {
+    pub id: String,
+    pub module_id: String,
+    pub display_name: String,
+    pub kind: GrantKind,
+    pub access: GrantAccess,
+}
+
+impl From<FileGrant> for FileGrantSummary {
+    fn from(grant: FileGrant) -> Self {
+        Self {
+            id: grant.id,
+            module_id: grant.module_id,
+            display_name: grant.display_name,
+            kind: grant.kind,
+            access: grant.access,
+        }
+    }
 }
 
 #[derive(Debug, Clone, Serialize, PartialEq, Eq)]
@@ -250,12 +265,15 @@ impl FilesystemManager {
         resolve_existing_grant_target(&grant)
     }
 
-    pub fn resolve_external_path(
+    pub fn resolve_readable_file(
         &self,
         module_id: &str,
         grant_id: &str,
     ) -> Result<PathBuf, String> {
         let grant = self.require_grant(module_id, grant_id)?;
+        if grant.kind != GrantKind::File || !grant.access.read {
+            return Err("grant_read_denied".into());
+        }
         resolve_existing_grant_target(&grant)
     }
 
