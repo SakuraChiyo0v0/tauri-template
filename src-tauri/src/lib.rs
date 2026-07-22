@@ -66,6 +66,7 @@ pub fn run() {
             features::native_capabilities::runtime::list_runtime_module_shortcut_statuses,
             features::native_capabilities::runtime::rebind_runtime_module_shortcut,
             features::native_capabilities::runtime::disable_runtime_module_shortcut,
+            features::native_capabilities::runtime::set_application_locale,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

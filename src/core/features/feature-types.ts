@@ -1,6 +1,7 @@
 import type { ComponentType } from "react";
 import type { SettingContribution } from "@/core/settings/setting-types";
 import type { InstalledRuntimeModule } from "@/core/runtime-modules/runtime-module-types";
+import type { LocalizedText } from "@/core/i18n/localized-text";
 
 export type NavigationGroup = "main" | "system";
 export type FeatureSource = "builtin" | "runtime";
@@ -11,23 +12,25 @@ export interface NavigationIconProps {
 
 export interface NavigationContribution {
   id: string;
-  title: string;
-  description?: string;
+  title: LocalizedText;
+  description?: LocalizedText;
   icon: ComponentType<NavigationIconProps>;
   component: ComponentType;
   group?: NavigationGroup;
   order?: number;
 }
 
-export type ResolvedNavigation = NavigationContribution & {
+export type ResolvedNavigation = Omit<NavigationContribution, "title" | "description"> & {
+  title: string;
+  description?: string;
   moduleId: string;
   moduleName: string;
 };
 
 export interface FeatureModule {
   id: string;
-  name: string;
-  description: string;
+  name: LocalizedText;
+  description: LocalizedText;
   version: string;
   defaultEnabled: boolean;
   canDisable?: boolean;

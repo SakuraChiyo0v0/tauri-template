@@ -44,6 +44,7 @@ pnpm tauri build
 - `components/ui` 是已配置好的无业务基础组件，可以直接导入。
 - `themes` 通过语义 CSS 变量同步所有组件，显示模式与配色预设彼此独立。
 - `core` 提供稳定的模块、导航、设置和持久化契约。
+- `core/i18n` 统一管理中文与英文；语言选择会持久化，并立即同步到底座、源码模块和运行时模块。
 - `features` 保存可从源码添加或移除的功能模块。
 - `App` 只渲染模块贡献的侧边栏和页面，不直接依赖具体功能。
 - `SettingsPage` 不感知具体模块；模块通过清单贡献设置。
@@ -56,15 +57,15 @@ pnpm tauri build
 ```tsx
 export const exampleFeature = defineFeature({
   id: "example",
-  name: "示例功能",
-  description: "模块说明",
+  name: { "zh-CN": "示例功能", en: "Example feature" },
+  description: { "zh-CN": "模块说明", en: "Feature description" },
   version: "0.1.0",
   defaultEnabled: true,
   navigation: [
     {
       id: "example-home",
-      title: "示例功能",
-      description: "示例页面说明",
+      title: { "zh-CN": "示例功能", en: "Example feature" },
+      description: { "zh-CN": "示例页面说明", en: "Example page description" },
       icon: ExampleIcon,
       component: ExamplePage,
       group: "main",
@@ -77,7 +78,7 @@ export const exampleFeature = defineFeature({
       type: "switch",
       group: "features",
       order: 10,
-      label: "功能选项",
+      label: { "zh-CN": "功能选项", en: "Feature option" },
       defaultValue: true,
     },
   ],
@@ -86,13 +87,13 @@ export const exampleFeature = defineFeature({
 
 然后仅在 `src/app/module-registry.ts` 注册一次。侧边栏会自动显示已启用模块贡献的页面，设置页会自动按 `group` 和 `order` 显示设置项。停用模块时，这两类扩展都会自动消失。
 
-更完整的 AI 操作步骤位于 `.ai/recipes`。仓库根目录及关键目录中的 `AGENTS.md` 定义了模块边界和验证规则。
+所有宿主可见模块元数据都必须同时提供 `zh-CN` 和 `en`，缺少任一语言会在类型检查时失败。更完整的 AI 操作步骤位于 `.ai/recipes`。仓库根目录及关键目录中的 `AGENTS.md` 定义了模块边界和验证规则。
 
 ## 添加可独立更新的运行时模块
 
-运行时模块在独立的 `tauri-module-template` 工作区开发，不应复制到底座仓库或注册到 `src/app/module-registry.ts`。该模板提供 Host SDK V3 类型、浏览器模拟宿主、测试、单文件 ESM 构建和 `.mtp` 打包工具。
+运行时模块在独立的 `tauri-module-template` 工作区开发，不应复制到底座仓库或注册到 `src/app/module-registry.ts`。该模板提供 schema V2 双语清单、Host SDK V3 类型、语言模拟宿主、测试、单文件 ESM 构建和 `.mtp` 打包工具。新底座不再接受 schema V1 或 Host SDK V1 模块包。
 
-需要结构化持久化的模块应声明 Host SDK V2。底座为每个 V2 模块创建隔离的 SQLite 数据库，并通过参数化查询、执行、事务和 schema 版本接口访问；模块不能指定数据库路径、附加其他数据库或直接查询其他模块的数据。普通卸载保留数据库，停用模块后可在“模块管理”中显式清理。
+Host SDK V2 是当前最低协议，提供语言读取/订阅和模块隔离 SQLite；V3 在此基础上增加原生能力。底座为每个模块创建隔离的 SQLite 数据库，并通过参数化查询、执行、事务和 schema 版本接口访问；模块不能指定数据库路径、附加其他数据库或直接查询其他模块的数据。普通卸载保留数据库，停用模块后可在“模块管理”中显式清理。
 
 模块使用的 npm 库必须打包进 `index.js`；只有对其他已安装 `.mtp` 模块的要求才写入 `manifest.json` 的 `dependencies.required` 或 `dependencies.optional`。必需依赖缺失或版本不兼容时，包仍会保留，但模块会等待而不会执行；可选依赖不会阻止模块启动。依赖仅约束兼容版本与激活顺序，不允许直接导入其他模块源码或调用其内部实现。
 

@@ -1,4 +1,6 @@
 import type { ResolvedSetting } from "@/core/settings/setting-types";
+import { getLocaleSnapshot, type SupportedLocale } from "@/core/i18n/locale-store";
+import { resolveLocalizedText } from "@/core/i18n/localized-text";
 import { isFeatureEnabled, setFeatureEnabled } from "./feature-state";
 import type { FeatureModule, RegisteredFeature, ResolvedNavigation } from "./feature-types";
 
@@ -97,15 +99,17 @@ export class FeatureRegistry {
     await feature.teardown?.();
   }
 
-  getNavigation(): ResolvedNavigation[] {
+  getNavigation(locale: SupportedLocale = getLocaleSnapshot()): ResolvedNavigation[] {
     return this.getAll()
       .filter((feature) => this.isEnabled(feature))
       .flatMap((feature) =>
         (feature.navigation ?? []).map((navigation) => ({
           ...navigation,
+          title: resolveLocalizedText(navigation.title, locale),
+          description: navigation.description ? resolveLocalizedText(navigation.description, locale) : undefined,
           group: navigation.group ?? "main",
           moduleId: feature.id,
-          moduleName: feature.name,
+          moduleName: resolveLocalizedText(feature.name, locale),
         })),
       )
       .sort(
@@ -116,15 +120,29 @@ export class FeatureRegistry {
       );
   }
 
-  getSettings(): ResolvedSetting[] {
+  getSettings(locale: SupportedLocale = getLocaleSnapshot()): ResolvedSetting[] {
     return this.getAll()
       .filter((feature) => this.isEnabled(feature))
       .flatMap((feature) =>
-        (feature.settings ?? []).map((setting) => ({
-          ...setting,
-          moduleId: feature.id,
-          moduleName: feature.name,
-        })),
+        (feature.settings ?? []).map((setting): ResolvedSetting => {
+          const metadata = {
+            label: resolveLocalizedText(setting.label, locale),
+            description: setting.description ? resolveLocalizedText(setting.description, locale) : undefined,
+            moduleId: feature.id,
+            moduleName: resolveLocalizedText(feature.name, locale),
+          };
+          if (setting.type === "select") {
+            return {
+              ...setting,
+              ...metadata,
+              options: setting.options.map((option) => ({
+                ...option,
+                label: resolveLocalizedText(option.label, locale),
+              })),
+            };
+          }
+          return { ...setting, ...metadata };
+        }),
       )
       .sort((left, right) => left.group.localeCompare(right.group) || (left.order ?? 0) - (right.order ?? 0));
   }

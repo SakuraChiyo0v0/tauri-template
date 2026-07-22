@@ -346,7 +346,10 @@ fn normalize_shortcuts(
 fn validate_runtime_accelerator(accelerator: &str) -> Result<(), String> {
     normalize_shortcuts(vec![ShortcutDeclaration {
         id: "runtime-binding".into(),
-        description: "Runtime shortcut binding".into(),
+        description: crate::features::runtime_modules::manifest::LocalizedText {
+            zh_cn: "运行时快捷键绑定".into(),
+            en: "Runtime shortcut binding".into(),
+        },
         accelerator: accelerator.to_owned(),
     }])?;
     Ok(())
@@ -380,11 +383,15 @@ fn release_if_owned(
 mod tests {
     use super::*;
     use crate::features::native_capabilities::permissions::ShortcutDeclaration;
+    use crate::features::runtime_modules::manifest::LocalizedText;
 
     fn shortcut(id: &str, accelerator: &str) -> ShortcutDeclaration {
         ShortcutDeclaration {
             id: id.into(),
-            description: format!("Shortcut {id}"),
+            description: LocalizedText {
+                zh_cn: format!("快捷键 {id}"),
+                en: format!("Shortcut {id}"),
+            },
             accelerator: accelerator.into(),
         }
     }

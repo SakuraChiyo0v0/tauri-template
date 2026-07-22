@@ -7,17 +7,32 @@ use crate::features::native_capabilities::permissions::{
     NativeCapabilities, NormalizedNativeCapabilities,
 };
 
-pub const SCHEMA_VERSION: u32 = 1;
-pub const MIN_SDK_VERSION: u32 = 1;
+pub const SCHEMA_VERSION: u32 = 2;
+pub const MIN_SDK_VERSION: u32 = 2;
 pub const MAX_SDK_VERSION: u32 = 3;
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, PartialOrd, Ord)]
+#[serde(deny_unknown_fields)]
+pub struct LocalizedText {
+    #[serde(rename = "zh-CN")]
+    pub zh_cn: String,
+    pub en: String,
+}
+
+impl LocalizedText {
+    pub fn validate(&self, label: &str, max_length: usize) -> Result<(), String> {
+        validate_text(&self.zh_cn, &format!("{label}.zh-CN"), max_length)?;
+        validate_text(&self.en, &format!("{label}.en"), max_length)
+    }
+}
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(rename_all = "camelCase")]
 pub struct RuntimeModuleManifest {
     pub schema_version: u32,
     pub id: String,
-    pub name: String,
-    pub description: String,
+    pub name: LocalizedText,
+    pub description: LocalizedText,
     pub version: String,
     pub host_version: String,
     pub sdk_version: u32,
@@ -50,8 +65,8 @@ pub struct RuntimeModuleDependency {
 #[serde(rename_all = "camelCase")]
 pub struct RuntimeNavigationManifest {
     pub id: String,
-    pub title: String,
-    pub description: Option<String>,
+    pub title: LocalizedText,
+    pub description: Option<LocalizedText>,
     pub element: String,
     #[serde(default = "default_navigation_group")]
     pub group: String,
@@ -67,8 +82,8 @@ fn default_navigation_group() -> String {
 pub enum RuntimeSettingManifest {
     Switch {
         id: String,
-        label: String,
-        description: Option<String>,
+        label: LocalizedText,
+        description: Option<LocalizedText>,
         group: String,
         order: Option<i32>,
         #[serde(rename = "defaultValue")]
@@ -76,8 +91,8 @@ pub enum RuntimeSettingManifest {
     },
     Select {
         id: String,
-        label: String,
-        description: Option<String>,
+        label: LocalizedText,
+        description: Option<LocalizedText>,
         group: String,
         order: Option<i32>,
         #[serde(rename = "defaultValue")]
@@ -88,7 +103,7 @@ pub enum RuntimeSettingManifest {
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct RuntimeSelectOption {
-    pub label: String,
+    pub label: LocalizedText,
     pub value: String,
 }
 
@@ -116,8 +131,8 @@ impl RuntimeModuleManifest {
         if !is_module_id(&self.id) || matches!(self.id.as_str(), "system" | "logging") {
             return Err(format!("invalid or reserved module id: {}", self.id));
         }
-        validate_text(&self.name, "module name", 200)?;
-        validate_text(&self.description, "module description", 500)?;
+        self.name.validate("module name", 200)?;
+        self.description.validate("module description", 500)?;
         Version::parse(&self.version)
             .map_err(|error| format!("invalid module version: {error}"))?;
         let host_requirement = VersionReq::parse(&self.host_version)
@@ -170,9 +185,9 @@ impl RuntimeModuleManifest {
                     navigation.id
                 ));
             }
-            validate_text(&navigation.title, "navigation title", 200)?;
+            navigation.title.validate("navigation title", 200)?;
             if let Some(description) = &navigation.description {
-                validate_text(description, "navigation description", 500)?;
+                description.validate("navigation description", 500)?;
             }
             if navigation.group != "main" && navigation.group != "system" {
                 return Err(format!("invalid navigation group: {}", navigation.group));
@@ -209,10 +224,10 @@ impl RuntimeModuleManifest {
             if !is_contribution_id(id) || !setting_ids.insert(id) {
                 return Err(format!("invalid or duplicate setting id: {id}"));
             }
-            validate_text(label, "setting label", 200)?;
+            label.validate("setting label", 200)?;
             validate_text(group, "setting group", 64)?;
             if let Some(description) = description {
-                validate_text(description, "setting description", 500)?;
+                description.validate("setting description", 500)?;
             }
             if let RuntimeSettingManifest::Select {
                 default_value,
@@ -222,7 +237,7 @@ impl RuntimeModuleManifest {
                 && (options.is_empty()
                     || !options.iter().any(|option| &option.value == default_value)
                     || options.iter().any(|option| {
-                        validate_text(&option.label, "select option label", 200).is_err()
+                        option.label.validate("select option label", 200).is_err()
                             || validate_text(&option.value, "select option value", 200).is_err()
                     }))
             {
@@ -271,20 +286,27 @@ fn is_contribution_id(value: &str) -> bool {
 mod tests {
     use super::*;
 
+    fn text(zh_cn: &str, en: &str) -> LocalizedText {
+        LocalizedText {
+            zh_cn: zh_cn.into(),
+            en: en.into(),
+        }
+    }
+
     fn manifest() -> RuntimeModuleManifest {
         RuntimeModuleManifest {
-            schema_version: 1,
+            schema_version: 2,
             id: "hello-module".into(),
-            name: "Hello Module".into(),
-            description: "Runtime module used by tests".into(),
+            name: text("问候模块", "Hello Module"),
+            description: text("测试运行时模块", "Runtime module used by tests"),
             version: "1.2.0".into(),
             host_version: ">=0.1.0, <0.2.0".into(),
-            sdk_version: 1,
+            sdk_version: 2,
             entry: "index.js".into(),
             dependencies: RuntimeModuleDependencies::default(),
             navigation: vec![RuntimeNavigationManifest {
                 id: "hello-home".into(),
-                title: "Hello".into(),
+                title: text("问候", "Hello"),
                 description: None,
                 element: "hello-module-home".into(),
                 group: "main".into(),
@@ -301,12 +323,22 @@ mod tests {
     }
 
     #[test]
-    fn accepts_sdk_v1_v2_and_v3_but_rejects_newer_versions() {
+    fn rejects_schema_v1_and_sdk_v1() {
         let mut value = manifest();
-        value.sdk_version = 2;
-        assert!(value.validate(&Version::new(0, 1, 0)).is_ok());
+        value.schema_version = 1;
+        assert!(value.validate(&Version::new(0, 1, 0)).is_err());
+        value.schema_version = 2;
+        value.sdk_version = 1;
+        assert!(value.validate(&Version::new(0, 1, 0)).is_err());
+    }
+
+    #[test]
+    fn accepts_sdk_v2_and_v3_but_rejects_other_versions() {
+        let mut value = manifest();
         value.sdk_version = 3;
         assert!(value.validate(&Version::new(0, 1, 0)).is_ok());
+        value.sdk_version = 1;
+        assert!(value.validate(&Version::new(0, 1, 0)).is_err());
         value.sdk_version = 4;
         assert!(
             value
@@ -314,6 +346,26 @@ mod tests {
                 .unwrap_err()
                 .contains("SDK version")
         );
+    }
+
+    #[test]
+    fn rejects_missing_or_blank_translations() {
+        let mut value = serde_json::to_value(manifest()).unwrap();
+        value["name"] = serde_json::json!({ "zh-CN": "问候模块" });
+        assert!(RuntimeModuleManifest::parse_and_validate(
+            &serde_json::to_vec(&value).unwrap(),
+            &Version::new(0, 1, 0),
+        )
+        .is_err());
+
+        value = serde_json::to_value(manifest()).unwrap();
+        value["navigation"][0]["title"]["en"] = serde_json::json!("  ");
+        let error = RuntimeModuleManifest::parse_and_validate(
+            &serde_json::to_vec(&value).unwrap(),
+            &Version::new(0, 1, 0),
+        )
+        .unwrap_err();
+        assert!(error.contains("navigation title.en"));
     }
 
     #[test]
@@ -353,7 +405,7 @@ mod tests {
     }
 
     #[test]
-    fn treats_a_legacy_manifest_as_dependency_free() {
+    fn treats_an_omitted_dependency_block_as_dependency_free() {
         let parsed = RuntimeModuleManifest::parse_and_validate(
             &serde_json::to_vec(&manifest()).unwrap(),
             &Version::new(0, 1, 0),

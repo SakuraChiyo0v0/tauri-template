@@ -1,5 +1,6 @@
 import type { ThemeState } from "@/themes/theme-types";
 import type { LogLevel } from "@/features/logging/logger";
+import type { SupportedLocale } from "@/core/i18n/locale-store";
 import type { RuntimeModuleDependency, RuntimeModuleManifest } from "./runtime-manifest";
 
 export interface RuntimeModuleError {
@@ -19,6 +20,15 @@ export type RuntimeModuleDiagnosticCode =
   | "waiting_permission";
 
 export type RuntimeModulePermissionStatus = "not_required" | "awaiting_approval" | "approved";
+
+export type NativePermissionSummary =
+  | { kind: "private_filesystem" }
+  | { kind: "external_filesystem"; access: string[] }
+  | { kind: "url_schemes"; schemes: string[] }
+  | { kind: "executable_grants" }
+  | { kind: "registry"; hive: string; key: string; access: "read" | "read_write" }
+  | { kind: "tray"; count: number }
+  | { kind: "shortcuts"; count: number };
 
 export interface RuntimeModuleDiagnostic {
   code: RuntimeModuleDiagnosticCode;
@@ -57,7 +67,7 @@ export interface InstalledRuntimeModule {
   lastError: RuntimeModuleError | null;
   permissionStatus: RuntimeModulePermissionStatus;
   permissionVersion: string | null;
-  nativePermissionSummary: string[];
+  nativePermissionSummary: NativePermissionSummary[];
   nativePermissionFingerprint: string | null;
 }
 
@@ -195,7 +205,7 @@ export interface RuntimeModuleNativeBackend {
   onShortcutTrigger(moduleId: string, listener: (shortcutId: string) => void): Promise<() => void>;
 }
 
-interface RuntimeModuleHostSdkBase {
+export interface RuntimeModuleHostSdkBase {
   readonly hostVersion: string;
   readonly module: {
     readonly id: string;
@@ -211,10 +221,10 @@ interface RuntimeModuleHostSdkBase {
     get(): ThemeState;
     subscribe(listener: (theme: ThemeState) => void): () => void;
   };
-}
-
-export interface RuntimeModuleHostSdkV1 extends RuntimeModuleHostSdkBase {
-  readonly sdkVersion: 1;
+  readonly i18n: {
+    getLocale(): SupportedLocale;
+    subscribe(listener: (locale: SupportedLocale) => void): () => void;
+  };
 }
 
 export interface RuntimeModuleHostSdkV2 extends RuntimeModuleHostSdkBase {
@@ -257,7 +267,7 @@ export interface RuntimeModuleHostSdkV3 extends RuntimeModuleHostSdkBase {
   };
 }
 
-export type RuntimeModuleHostSdk = RuntimeModuleHostSdkV1 | RuntimeModuleHostSdkV2 | RuntimeModuleHostSdkV3;
+export type RuntimeModuleHostSdk = RuntimeModuleHostSdkV2 | RuntimeModuleHostSdkV3;
 
 export interface ModuleDataInventoryItem {
   moduleId: string;

@@ -75,7 +75,8 @@ pub struct InstalledRuntimeModule {
     pub last_error: Option<RuntimeModuleError>,
     pub permission_status: PermissionStatus,
     pub permission_version: Option<String>,
-    pub native_permission_summary: Vec<String>,
+    pub native_permission_summary:
+        Vec<crate::features::native_capabilities::permissions::NativePermissionSummary>,
     pub native_permission_fingerprint: Option<String>,
 }
 
@@ -1198,17 +1199,17 @@ mod tests {
 
     fn manifest(version: &str) -> String {
         serde_json::json!({
-            "schemaVersion": 1,
+            "schemaVersion": 2,
             "id": "hello-module",
-            "name": "Hello Module",
-            "description": "Runtime module used by tests",
+            "name": { "zh-CN": "问候模块", "en": "Hello Module" },
+            "description": { "zh-CN": "测试使用的运行时模块", "en": "Runtime module used by tests" },
             "version": version,
             "hostVersion": ">=0.1.0, <0.2.0",
-            "sdkVersion": 1,
+            "sdkVersion": 2,
             "entry": "index.js",
             "navigation": [{
                 "id": "hello-home",
-                "title": "Hello",
+                "title": { "zh-CN": "问候", "en": "Hello" },
                 "element": "hello-module-home",
                 "group": "main"
             }],
@@ -1263,13 +1264,13 @@ mod tests {
             })
             .collect::<Vec<_>>();
         let manifest = serde_json::json!({
-            "schemaVersion": 1,
+            "schemaVersion": 2,
             "id": id,
-            "name": id,
-            "description": format!("{id} test module"),
+            "name": { "zh-CN": id, "en": id },
+            "description": { "zh-CN": format!("{id} 测试模块"), "en": format!("{id} test module") },
             "version": version,
             "hostVersion": ">=0.1.0, <0.2.0",
-            "sdkVersion": 1,
+            "sdkVersion": 2,
             "entry": "index.js",
             "dependencies": { "required": dependencies, "optional": [] },
             "navigation": [],
@@ -1291,10 +1292,10 @@ mod tests {
         let options = SimpleFileOptions::default().compression_method(CompressionMethod::Deflated);
         archive.start_file("manifest.json", options).unwrap();
         let manifest = serde_json::json!({
-            "schemaVersion": 1,
+            "schemaVersion": 2,
             "id": "native-tools",
-            "name": "Native tools",
-            "description": "V3 permission test module",
+            "name": { "zh-CN": "原生工具", "en": "Native tools" },
+            "description": { "zh-CN": "V3 权限测试模块", "en": "V3 permission test module" },
             "version": "1.0.0",
             "hostVersion": ">=0.1.0, <0.2.0",
             "sdkVersion": 3,
@@ -1313,6 +1314,38 @@ mod tests {
         archive.start_file("index.js", options).unwrap();
         archive
             .write_all(b"export async function activate() { throw new Error('must not run'); }")
+            .unwrap();
+        archive.finish().unwrap();
+        path
+    }
+
+    fn legacy_single_language_package(directory: &Path) -> PathBuf {
+        let path = directory.join("legacy-single-language.mtp");
+        let file = File::create(&path).unwrap();
+        let mut archive = ZipWriter::new(file);
+        let options = SimpleFileOptions::default().compression_method(CompressionMethod::Deflated);
+        archive.start_file("manifest.json", options).unwrap();
+        archive
+            .write_all(
+                serde_json::json!({
+                    "schemaVersion": 1,
+                    "id": "hello-module",
+                    "name": "Hello Module",
+                    "description": "Legacy single-language package",
+                    "version": "1.1.0",
+                    "hostVersion": ">=0.1.0, <0.2.0",
+                    "sdkVersion": 1,
+                    "entry": "index.js",
+                    "navigation": [],
+                    "settings": []
+                })
+                .to_string()
+                .as_bytes(),
+            )
+            .unwrap();
+        archive.start_file("index.js", options).unwrap();
+        archive
+            .write_all(b"export async function activate() {}")
             .unwrap();
         archive.finish().unwrap();
         path
@@ -1802,6 +1835,23 @@ mod tests {
     }
 
     #[test]
+    fn rejects_legacy_protocol_without_changing_the_active_plan() {
+        let temp = tempfile::tempdir().unwrap();
+        let store = store(temp.path());
+        store
+            .install(&package(temp.path(), "current", "1.0.0", true, &[]))
+            .unwrap();
+        let before = store.snapshot(&[]).unwrap();
+
+        assert!(store.install(&legacy_single_language_package(temp.path())).is_err());
+
+        let after = store.snapshot(&[]).unwrap();
+        assert_eq!(after.plan.generation, before.plan.generation);
+        assert_eq!(after.plan.selected_versions, before.plan.selected_versions);
+        assert_eq!(after.modules[0].available_versions, ["1.0.0"]);
+    }
+
+    #[test]
     fn rejects_unsafe_paths_without_writing_outside_the_store() {
         let temp = tempfile::tempdir().unwrap();
         let store = store(temp.path());
@@ -1934,38 +1984,57 @@ mod tests {
     }
 
     #[test]
-    #[ignore = "manual smoke: set MTP_SMOKE_V1 and MTP_SMOKE_V2 to real package paths"]
+    #[ignore = "manual smoke: set MTP_SMOKE_PACKAGE_1 and MTP_SMOKE_PACKAGE_2 to real schema V2 package paths"]
     fn runs_the_real_package_lifecycle_smoke() {
-        let first_package = std::env::var("MTP_SMOKE_V1").expect("MTP_SMOKE_V1 is required");
-        let second_package = std::env::var("MTP_SMOKE_V2").expect("MTP_SMOKE_V2 is required");
+        let first_package = std::env::var("MTP_SMOKE_PACKAGE_1")
+            .expect("MTP_SMOKE_PACKAGE_1 is required");
+        let second_package = std::env::var("MTP_SMOKE_PACKAGE_2")
+            .expect("MTP_SMOKE_PACKAGE_2 is required");
         let temp = tempfile::tempdir().unwrap();
         let store = ModuleStore::new(
             temp.path().join("modules"),
             Version::parse(env!("CARGO_PKG_VERSION")).unwrap(),
         );
 
-        let installed = store.install(Path::new(&first_package)).unwrap();
-        let module_id = installed.manifest.id.clone();
-        let first_version = installed.manifest.version.clone();
-        assert_eq!(installed.active_version, first_version);
-        assert!(store.install(Path::new(&first_package)).is_err());
-        assert_eq!(store.list().unwrap()[0].active_version, first_version);
+        let installed = store.install_with_plan(Path::new(&first_package)).unwrap();
+        let first = installed
+            .modules
+            .iter()
+            .find(|module| module.manifest.id == installed.module_id)
+            .unwrap();
+        let module_id = first.manifest.id.clone();
+        let first_version = first.manifest.version.clone();
+        if first.manifest.sdk_version == 3 {
+            store
+                .approve_native_permissions(&module_id, &first_version)
+                .unwrap();
+        }
+        assert_eq!(
+            store.snapshot(&[]).unwrap().plan.selected_versions[&module_id],
+            first_version
+        );
+        assert!(store.install_with_plan(Path::new(&first_package)).is_err());
 
-        let upgraded = store.install(Path::new(&second_package)).unwrap();
-        assert_eq!(upgraded.manifest.id, module_id);
+        let upgraded = store.install_with_plan(Path::new(&second_package)).unwrap();
+        let upgraded_module = upgraded
+            .modules
+            .iter()
+            .find(|module| module.manifest.id == module_id)
+            .unwrap();
+        assert_eq!(upgraded_module.manifest.id, module_id);
         assert!(
-            Version::parse(&upgraded.manifest.version).unwrap()
+            Version::parse(&upgraded_module.manifest.version).unwrap()
                 > Version::parse(&first_version).unwrap()
         );
-        assert_eq!(upgraded.active_version, upgraded.manifest.version);
         assert_eq!(
-            upgraded.previous_version.as_deref(),
+            upgraded_module.previous_selected_version.as_deref(),
             Some(first_version.as_str())
         );
 
-        let rolled_back = store.rollback(&module_id).unwrap();
-        assert_eq!(rolled_back.active_version, first_version);
-        store.uninstall(&module_id).unwrap();
-        assert!(store.list().unwrap().is_empty());
+        let rolled_back = store.rollback_with_plan(&module_id).unwrap();
+        assert_eq!(rolled_back.plan.selected_versions[&module_id], first_version);
+        let uninstalled = store.uninstall_with_plan(&module_id).unwrap();
+        assert!(!uninstalled.plan.selected_versions.contains_key(&module_id));
+        assert!(uninstalled.modules.is_empty());
     }
 }

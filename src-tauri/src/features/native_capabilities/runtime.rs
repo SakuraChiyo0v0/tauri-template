@@ -35,6 +35,7 @@ pub struct NativeRuntimeState {
     tray: TrayRegistry,
     shortcuts: ShortcutRegistry,
     registered_shortcuts: Mutex<BTreeMap<String, String>>,
+    locale: Mutex<String>,
 }
 
 impl NativeRuntimeState {
@@ -52,7 +53,19 @@ impl NativeRuntimeState {
             tray: TrayRegistry::default(),
             shortcuts: ShortcutRegistry::new(app_data.join("native-shortcuts.json")),
             registered_shortcuts: Mutex::new(BTreeMap::new()),
+            locale: Mutex::new("zh-CN".into()),
         }
+    }
+
+    pub fn set_locale(&self, locale: &str) -> Result<(), String> {
+        if !matches!(locale, "zh-CN" | "en") {
+            return Err(format!("unsupported application locale: {locale}"));
+        }
+        *self
+            .locale
+            .lock()
+            .map_err(|_| "application locale lock poisoned")? = locale.to_owned();
+        self.sync_tray()
     }
 
     fn session(
@@ -217,6 +230,12 @@ impl NativeRuntimeState {
 
     fn sync_tray(&self) -> Result<(), String> {
         const TRAY_ID: &str = "runtime-modules";
+        let locale = self
+            .locale
+            .lock()
+            .map_err(|_| "application locale lock poisoned")?
+            .clone();
+        self.tray.set_locale(&locale)?;
         let groups = self.tray.snapshot();
         if groups.is_empty() {
             self.app.remove_tray_by_id(TRAY_ID);
@@ -224,7 +243,8 @@ impl NativeRuntimeState {
         }
 
         let menu = Menu::new(&self.app).map_err(|error| format!("create tray menu: {error}"))?;
-        let show = MenuItem::with_id(&self.app, "host::show", "显示主窗口", true, None::<&str>)
+        let show_label = if locale == "en" { "Show main window" } else { "显示主窗口" };
+        let show = MenuItem::with_id(&self.app, "host::show", show_label, true, None::<&str>)
             .map_err(|error| format!("create tray show item: {error}"))?;
         menu.append(&show)
             .map_err(|error| format!("append tray show item: {error}"))?;
@@ -278,7 +298,8 @@ impl NativeRuntimeState {
             menu.append(&submenu)
                 .map_err(|error| format!("append module tray group: {error}"))?;
         }
-        let quit = MenuItem::with_id(&self.app, "host::quit", "退出", true, None::<&str>)
+        let quit_label = if locale == "en" { "Quit" } else { "退出" };
+        let quit = MenuItem::with_id(&self.app, "host::quit", quit_label, true, None::<&str>)
             .map_err(|error| format!("create tray quit item: {error}"))?;
         menu.append(&quit)
             .map_err(|error| format!("append tray quit item: {error}"))?;
@@ -307,6 +328,14 @@ impl NativeRuntimeState {
 struct NativeContributionEvent {
     module_id: String,
     item_id: String,
+}
+
+#[tauri::command]
+pub fn set_application_locale(
+    locale: String,
+    state: State<'_, NativeRuntimeState>,
+) -> Result<(), String> {
+    state.set_locale(&locale)
 }
 
 fn handle_tray_menu_event(app: &AppHandle, id: &str) {

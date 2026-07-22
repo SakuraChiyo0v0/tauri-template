@@ -2,6 +2,7 @@ import { describe, expect, it, vi } from "vitest";
 import { clearLogEntries, getLogSnapshot } from "@/features/logging/log-store";
 import { decodeModuleLogRecord } from "@/features/logging/logger";
 import { setColorMode } from "@/themes/theme-store";
+import { setLocale } from "@/core/i18n/locale-store";
 import { createRuntimeModuleHostSdk } from "./runtime-module-sdk";
 import type {
   InstalledRuntimeModule,
@@ -13,13 +14,13 @@ import type {
 function moduleRecord(): InstalledRuntimeModule {
   return {
     manifest: {
-      schemaVersion: 1,
+      schemaVersion: 2,
       id: "sdk-test-module",
-      name: "SDK test",
-      description: "SDK test module",
+      name: { "zh-CN": "SDK 测试", en: "SDK test" },
+      description: { "zh-CN": "SDK 测试模块", en: "SDK test module" },
       version: "2.1.0",
       hostVersion: "^0.1.0",
-      sdkVersion: 1,
+      sdkVersion: 2,
       entry: "index.js",
       dependencies: { required: [], optional: [] },
       navigation: [],
@@ -48,13 +49,8 @@ function moduleRecord(): InstalledRuntimeModule {
 }
 
 describe("runtime module host SDK", () => {
-  it("keeps database capability absent from Host SDK V1", async () => {
-    expect(await createRuntimeModuleHostSdk(moduleRecord())).not.toHaveProperty("database");
-  });
-
   it("provides namespaced database operations to Host SDK V2", async () => {
     const module = moduleRecord();
-    module.manifest.sdkVersion = 2;
     const select = vi.fn();
     const database: RuntimeModuleDatabaseBackend = {
       execute: vi.fn(async () => ({ rowsAffected: 1, lastInsertId: 7 })),
@@ -128,6 +124,19 @@ describe("runtime module host SDK", () => {
     setColorMode("dark");
 
     expect(listener).toHaveBeenCalledWith(expect.objectContaining({ mode: "dark" }));
+    unsubscribe();
+  });
+
+  it("exposes and publishes application language changes", async () => {
+    const sdk = await createRuntimeModuleHostSdk(moduleRecord());
+    const listener = vi.fn();
+    const unsubscribe = sdk.i18n.subscribe(listener);
+
+    expect(sdk.i18n.getLocale()).toBe("zh-CN");
+    setLocale("en");
+
+    expect(sdk.i18n.getLocale()).toBe("en");
+    expect(listener).toHaveBeenCalledWith("en");
     unsubscribe();
   });
 

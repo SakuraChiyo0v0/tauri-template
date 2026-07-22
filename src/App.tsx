@@ -4,6 +4,7 @@ import { featureRegistry } from "@/app/feature-registry";
 import { readStoredNavigationId, resolveActiveNavigation, storeNavigationId } from "@/app/navigation-state";
 import { Badge } from "@/components/ui/badge";
 import type { ResolvedNavigation } from "@/core/features/feature-types";
+import { useI18n } from "@/core/i18n/use-i18n";
 import { cn } from "@/lib/utils";
 
 const SIDEBAR_STORAGE_KEY = "modular-tauri.sidebar-collapsed.v1";
@@ -37,8 +38,9 @@ function NavigationButton({ entry, active, collapsed, onSelect }: {
 }
 
 function App() {
+  const { locale, t } = useI18n();
   useSyncExternalStore(featureRegistry.subscribe, featureRegistry.getSnapshot, featureRegistry.getSnapshot);
-  const navigation = featureRegistry.getNavigation();
+  const navigation = featureRegistry.getNavigation(locale);
   const [requestedNavigationId, setRequestedNavigationId] = useState(readStoredNavigationId);
   const [sidebarCollapsed, setSidebarCollapsed] = useState(
     () => localStorage.getItem(SIDEBAR_STORAGE_KEY) === "true",
@@ -82,12 +84,12 @@ function App() {
           {!sidebarCollapsed && (
             <div className="min-w-0">
               <div className="truncate text-base font-semibold">Modular Tauri</div>
-              <div className="truncate text-xs text-muted-foreground">可扩展桌面底座</div>
+              <div className="truncate text-xs text-muted-foreground">{t("app.tagline")}</div>
             </div>
           )}
         </div>
 
-        <nav className="flex min-h-0 flex-1 flex-col p-3" aria-label="功能导航">
+        <nav className="flex min-h-0 flex-1 flex-col p-3" aria-label={t("app.navigation")}>
           <div className="space-y-1">
             {mainNavigation.map((entry) => (
               <NavigationButton
@@ -121,10 +123,10 @@ function App() {
               "flex h-10 w-full items-center gap-3 rounded-lg px-3 text-sm text-muted-foreground outline-none hover:bg-muted hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring",
               sidebarCollapsed && "justify-center px-0",
             )}
-            aria-label={sidebarCollapsed ? "展开侧边栏" : "收起侧边栏"}
+            aria-label={sidebarCollapsed ? t("app.expandSidebar") : t("app.collapseSidebar")}
           >
             {sidebarCollapsed ? <PanelLeftOpen className="size-5" /> : <PanelLeftClose className="size-5" />}
-            {!sidebarCollapsed && <span>收起侧边栏</span>}
+            {!sidebarCollapsed && <span>{t("app.collapseSidebar")}</span>}
           </button>
         </div>
       </aside>
@@ -132,7 +134,7 @@ function App() {
       <div className="flex min-w-0 flex-1 flex-col">
         <header className="flex h-16 shrink-0 items-center justify-between border-b border-border bg-card px-7">
           <div className="min-w-0">
-            <h1 className="truncate text-xl font-semibold tracking-tight">{activeNavigation?.title ?? "没有可用页面"}</h1>
+            <h1 className="truncate text-xl font-semibold tracking-tight">{activeNavigation?.title ?? t("app.noAvailablePage")}</h1>
             {activeNavigation?.description && <p className="mt-1 truncate text-sm text-muted-foreground">{activeNavigation.description}</p>}
           </div>
           {activeNavigation && <Badge variant="outline">{activeNavigation.moduleName}</Badge>}
@@ -144,7 +146,7 @@ function App() {
               <ActivePage />
             ) : (
               <div className="rounded-xl border border-dashed border-border bg-card p-10 text-center text-sm text-muted-foreground">
-                当前没有模块注册功能页面。
+                {t("app.noRegisteredPage")}
               </div>
             )}
           </div>

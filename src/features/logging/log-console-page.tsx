@@ -5,6 +5,9 @@ import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs";
+import type { SupportedLocale } from "@/core/i18n/locale-store";
+import type { MessageKey } from "@/core/i18n/messages";
+import { useI18n } from "@/core/i18n/use-i18n";
 import { cn } from "@/lib/utils";
 import {
   clearLogEntries,
@@ -17,13 +20,13 @@ import {
   type LogFilter,
 } from "./log-store";
 
-const levelLabels: Record<LogFilter, string> = {
-  all: "全部",
-  trace: "跟踪",
-  debug: "调试",
-  info: "信息",
-  warn: "警告",
-  error: "错误",
+const levelLabels: Record<LogFilter, MessageKey> = {
+  all: "logs.level.all",
+  trace: "logs.level.trace",
+  debug: "logs.level.debug",
+  info: "logs.level.info",
+  warn: "logs.level.warn",
+  error: "logs.level.error",
 };
 
 const levelStyles: Record<LogEntry["level"], string> = {
@@ -34,8 +37,8 @@ const levelStyles: Record<LogEntry["level"], string> = {
   error: "border-destructive/25 bg-destructive/10 text-destructive",
 };
 
-function formatTimestamp(timestamp: string) {
-  return new Intl.DateTimeFormat("zh-CN", {
+function formatTimestamp(timestamp: string, locale: SupportedLocale) {
+  return new Intl.DateTimeFormat(locale, {
     year: "numeric",
     month: "2-digit",
     day: "2-digit",
@@ -61,6 +64,7 @@ function downloadEntries(entries: readonly LogEntry[], format: LogExportFormat) 
 }
 
 export function LogConsolePage() {
+  const { locale, t } = useI18n();
   const entries = useSyncExternalStore(subscribeLogStore, getLogSnapshot, getLogSnapshot);
   const [level, setLevel] = useState<LogFilter>("all");
   const [query, setQuery] = useState("");
@@ -75,20 +79,20 @@ export function LogConsolePage() {
               <SquareTerminal className="size-5 text-primary" />
             </div>
             <div className="space-y-1">
-              <h2 className="text-lg font-semibold">日志控制台</h2>
-              <p className="text-sm text-muted-foreground">查看当前运行会话中的前端、模块和 Rust 日志。</p>
+              <h2 className="text-lg font-semibold">{t("logs.console")}</h2>
+              <p className="text-sm text-muted-foreground">{t("logs.description")}</p>
             </div>
           </div>
 
           <div className="flex flex-wrap gap-2">
             <Button variant="outline" disabled={visibleEntries.length === 0} onClick={() => downloadEntries(visibleEntries, "json")}>
-              <Download className="size-4" />导出 JSON
+              <Download className="size-4" />{t("logs.exportJson")}
             </Button>
             <Button variant="outline" disabled={visibleEntries.length === 0} onClick={() => downloadEntries(visibleEntries, "text")}>
-              <Download className="size-4" />导出文本
+              <Download className="size-4" />{t("logs.exportText")}
             </Button>
             <Button variant="destructive" disabled={entries.length === 0} onClick={clearLogEntries}>
-              <Trash2 className="size-4" />清空
+              <Trash2 className="size-4" />{t("logs.clear")}
             </Button>
           </div>
         </div>
@@ -97,7 +101,7 @@ export function LogConsolePage() {
           <Tabs value={level} onValueChange={(value) => setLevel(value as LogFilter)}>
             <TabsList className="h-auto flex-wrap justify-start">
               {(Object.keys(levelLabels) as LogFilter[]).map((item) => (
-                <TabsTrigger key={item} value={item}>{levelLabels[item]}</TabsTrigger>
+                <TabsTrigger key={item} value={item}>{t(levelLabels[item])}</TabsTrigger>
               ))}
             </TabsList>
           </Tabs>
@@ -107,12 +111,12 @@ export function LogConsolePage() {
             <Input
               value={query}
               onChange={(event) => setQuery(event.target.value)}
-              placeholder="搜索日志内容或来源"
-              aria-label="搜索日志"
+              placeholder={t("logs.search")}
+              aria-label={t("logs.search")}
               className="pl-9"
             />
           </div>
-          <div className="shrink-0 text-sm text-muted-foreground">{visibleEntries.length} 条</div>
+          <div className="shrink-0 text-sm text-muted-foreground">{t("logs.count", { count: visibleEntries.length })}</div>
         </div>
 
         <div className="min-h-72 max-h-[calc(100vh-22rem)] overflow-auto">
@@ -120,8 +124,8 @@ export function LogConsolePage() {
             <div className="flex min-h-72 flex-col items-center justify-center gap-3 px-6 text-center text-muted-foreground">
               <Inbox className="size-8" />
               <div>
-                <p className="text-sm font-medium text-foreground">没有匹配的日志</p>
-                <p className="mt-1 text-xs">等待新日志，或调整当前的筛选条件。</p>
+                <p className="text-sm font-medium text-foreground">{t("logs.emptyTitle")}</p>
+                <p className="mt-1 text-xs">{t("logs.emptyDescription")}</p>
               </div>
             </div>
           ) : (
@@ -132,7 +136,7 @@ export function LogConsolePage() {
                   className="grid gap-2 px-4 py-3 text-sm hover:bg-muted/30 md:grid-cols-[11rem_5.5rem_8rem_minmax(0,1fr)] md:items-center md:px-5"
                 >
                   <time className="font-mono text-xs text-muted-foreground" dateTime={entry.timestamp}>
-                    {formatTimestamp(entry.timestamp)}
+                    {formatTimestamp(entry.timestamp, locale)}
                   </time>
                   <div>
                     <Badge className={cn("rounded-md font-mono font-medium", levelStyles[entry.level])} variant="outline">
@@ -149,7 +153,7 @@ export function LogConsolePage() {
       </Card>
 
       <p className="px-1 text-xs text-muted-foreground">
-        控制台最多保留当前会话最近 1000 条日志；清空不会删除磁盘中的历史日志文件。
+        {t("logs.retention")}
       </p>
     </section>
   );

@@ -3,9 +3,7 @@
 ## Purpose
 
 定义运行时模块在独立仓库中的开发、预览、构建、打包与底座集成验证要求，使模块能够脱离底座源码开发并生成可复现的本地安装包。
-
 ## Requirements
-
 ### Requirement: 模块模板必须脱离底座源码运行
 独立模块模板 MUST 在没有底座仓库源码和相对路径依赖的情况下完成依赖安装、类型检查、测试、构建和打包。模板 SHALL 只通过版本化 Host SDK 类型和 `.mtp` 包协议依赖底座。
 
@@ -17,23 +15,16 @@
 - **WHEN** 模板源码包含指向底座 `src` 或 `src-tauri` 的导入
 - **THEN** 仓库检查失败或静态审查能够直接识别该违规依赖
 
-### Requirement: 模板必须提供可用的 Host SDK V1 开发体验
-模板 MUST 提供 Host SDK V1 的 TypeScript 类型，并 SHALL 提供模拟模块身份、日志、私有设置和主题订阅的浏览器预览宿主。模拟宿主不得暗示存在 V1 未开放的原生权限。
-
-#### Scenario: 浏览器预览模块页面
-- **WHEN** 开发者运行开发命令并打开预览页
-- **THEN** 模块入口通过模拟 Host SDK 激活，清单声明的自定义元素渲染并可响应设置和主题变化
-
-#### Scenario: TypeScript 检查 SDK 用法
-- **WHEN** 模块代码调用 Host SDK V1 未声明的成员
-- **THEN** 类型检查失败
-
 ### Requirement: 模板必须生成合规且可复现的模块包
-打包命令 MUST 生成扩展名为 `.mtp` 的 ZIP 包，根目录包含合法 `manifest.json` 和单文件 ESM `index.js`，并只包含安全的相对资源路径。相同输入和版本 MUST 生成字节一致的包。
+打包命令 MUST 生成扩展名为 `.mtp` 的 ZIP 包，根目录包含合法且双语完整的 schema V2 `manifest.json` 和单文件 ESM `index.js`，并只包含安全的相对资源路径。相同输入和版本 MUST 生成字节一致的包。
 
 #### Scenario: 打包默认版本
-- **WHEN** 开发者运行模块打包命令
+- **WHEN** 开发者运行模块打包命令且清单全部双语字段有效
 - **THEN** `dist` 中生成名称包含模块 ID 和清单版本的 `.mtp` 文件
+
+#### Scenario: 拒绝单语言清单
+- **WHEN** 模块清单任一宿主文案缺少 `zh-CN`、`en` 或包含空白值
+- **THEN** 检查和打包命令失败且不生成 `.mtp` 产物
 
 #### Scenario: 覆盖冒烟版本
 - **WHEN** 开发者通过命令显式指定比清单更高的合法语义版本
@@ -60,3 +51,14 @@
 #### Scenario: 检查底座仓库内容
 - **WHEN** 维护者查看底座的 Git 跟踪文件
 - **THEN** 不存在 `examples/minimal-runtime-module`、模块 `.mtp` 产物或仅服务于该示例的打包脚本
+
+### Requirement: 模板必须提供可用的 Host SDK V3 双语开发体验
+模板 MUST 提供继承双语 Host SDK V2 基线的 Host SDK V3 TypeScript 类型，并 SHALL 提供模拟模块身份、日志、私有设置、主题、语言、隔离数据库与受控原生能力的浏览器预览宿主。模板模块 MUST 包含中文与英文页面词典并在语言变化后重绘；模拟原生能力只用于开发预览，不得暗示绕过清单声明、用户批准或宿主校验。
+
+#### Scenario: 浏览器预览模块页面
+- **WHEN** 开发者运行开发命令并在预览页切换中文与英文
+- **THEN** 模块入口通过模拟 Host SDK 激活，清单声明的自定义元素以对应语言渲染并响应设置、主题和语言变化
+
+#### Scenario: TypeScript 检查 SDK 用法
+- **WHEN** 模块代码调用 Host SDK V3 未声明的成员或缺少任一模块页面语言词典
+- **THEN** 类型检查或模块测试失败

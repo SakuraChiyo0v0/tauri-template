@@ -2,6 +2,7 @@ import packageMetadata from "../../../package.json";
 import { createModuleLogger } from "@/features/logging/logger";
 import { getSetting, setSetting, subscribeSettings } from "@/core/settings/setting-store";
 import { getThemeSnapshot, subscribeTheme } from "@/themes/theme-store";
+import { getLocaleSnapshot, subscribeLocale } from "@/core/i18n/locale-store";
 import { runtimeModuleDatabaseApi } from "./runtime-module-database-api";
 import { runtimeModuleNativeApi } from "./runtime-module-native-api";
 import type {
@@ -9,7 +10,7 @@ import type {
   RuntimeDatabaseStatement,
   RuntimeModuleDatabaseBackend,
   RuntimeModuleHostSdk,
-  RuntimeModuleHostSdkV1,
+  RuntimeModuleHostSdkV2,
   RuntimeModuleNativeBackend,
   RuntimeSqlValue,
 } from "./runtime-module-types";
@@ -36,7 +37,7 @@ export async function createRuntimeModuleHostSdk(
   nativeBackend: RuntimeModuleNativeBackend = runtimeModuleNativeApi,
 ): Promise<RuntimeModuleHostSdk> {
   const moduleId = module.manifest.id;
-  const base: Omit<RuntimeModuleHostSdkV1, "sdkVersion"> = {
+  const base: Omit<RuntimeModuleHostSdkV2, "sdkVersion" | "database"> = {
     hostVersion: packageMetadata.version,
     module: {
       id: moduleId,
@@ -54,9 +55,14 @@ export async function createRuntimeModuleHostSdk(
         return subscribeTheme(() => listener(getThemeSnapshot()));
       },
     },
+    i18n: {
+      getLocale: getLocaleSnapshot,
+      subscribe(listener) {
+        return subscribeLocale(() => listener(getLocaleSnapshot()));
+      },
+    },
   };
 
-  if (module.manifest.sdkVersion === 1) return { ...base, sdkVersion: 1 };
   if (module.manifest.sdkVersion === 2) {
     return { ...base, sdkVersion: 2, database: databaseApi(moduleId, databaseBackend) };
   }

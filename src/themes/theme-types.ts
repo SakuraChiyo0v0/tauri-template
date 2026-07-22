@@ -1,3 +1,5 @@
+import type { LocalizedText } from "@/core/i18n/localized-text";
+
 export type ColorMode = "system" | "light" | "dark";
 export type ThemePresetId = "neutral" | "ocean";
 
@@ -8,7 +10,7 @@ export interface ThemeState {
 
 export interface ThemePreset {
   id: ThemePresetId;
-  name: string;
-  description: string;
+  name: LocalizedText;
+  description: LocalizedText;
   swatch: string;
 }

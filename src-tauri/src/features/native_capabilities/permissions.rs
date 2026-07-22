@@ -8,7 +8,7 @@ use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use tempfile::NamedTempFile;
 
-use crate::features::runtime_modules::manifest::is_module_id;
+use crate::features::runtime_modules::manifest::{is_module_id, LocalizedText};
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, PartialOrd, Ord)]
 #[serde(rename_all = "kebab-case")]
@@ -80,7 +80,7 @@ pub enum TrayItemKind {
 #[serde(rename_all = "camelCase")]
 pub struct TrayItemDeclaration {
     pub id: String,
-    pub label: String,
+    pub label: Option<LocalizedText>,
     pub kind: TrayItemKind,
     pub order: i32,
 }
@@ -88,7 +88,7 @@ pub struct TrayItemDeclaration {
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, PartialOrd, Ord)]
 pub struct ShortcutDeclaration {
     pub id: String,
-    pub description: String,
+    pub description: LocalizedText,
     pub accelerator: String,
 }
 
@@ -113,6 +113,22 @@ pub struct NormalizedNativeCapabilities {
     pub registry: Vec<RegistryScope>,
     pub tray: Vec<TrayItemDeclaration>,
     pub shortcuts: Vec<ShortcutDeclaration>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub enum NativePermissionSummary {
+    PrivateFilesystem,
+    ExternalFilesystem { access: Vec<String> },
+    UrlSchemes { schemes: Vec<String> },
+    ExecutableGrants,
+    Registry {
+        hive: String,
+        key: String,
+        access: String,
+    },
+    Tray { count: usize },
+    Shortcuts { count: usize },
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -163,11 +179,14 @@ impl NativeCapabilities {
         validate_unique_contributions(tray.iter().map(|item| item.id.as_str()), "tray")?;
         for item in &tray {
             if item.kind == TrayItemKind::Separator {
-                if !item.label.is_empty() {
-                    return Err("tray separator label must be empty".into());
+                if item.label.is_some() {
+                    return Err("tray separator label must be omitted".into());
                 }
             } else {
-                validate_text(&item.label, "tray label", 120)?;
+                item.label
+                    .as_ref()
+                    .ok_or("tray item label must contain zh-CN and en")?
+                    .validate("tray label", 120)?;
             }
         }
         tray.sort_by(|left, right| (left.order, &left.id).cmp(&(right.order, &right.id)));
@@ -175,7 +194,7 @@ impl NativeCapabilities {
         let mut shortcuts = self.shortcuts.clone();
         validate_unique_contributions(shortcuts.iter().map(|item| item.id.as_str()), "shortcut")?;
         for item in &shortcuts {
-            validate_text(&item.description, "shortcut description", 200)?;
+            item.description.validate("shortcut description", 200)?;
             validate_accelerator(&item.accelerator)?;
         }
         shortcuts.sort_by(|left, right| left.id.cmp(&right.id));
@@ -197,34 +216,54 @@ impl NormalizedNativeCapabilities {
         digest.iter().map(|byte| format!("{byte:02x}")).collect()
     }
 
-    pub fn summary(&self) -> Vec<String> {
+    pub fn summary(&self) -> Vec<NativePermissionSummary> {
         let mut result = Vec::new();
         if let Some(filesystem) = &self.filesystem {
             if filesystem.private {
-                result.push("模块私有文件".into());
+                result.push(NativePermissionSummary::PrivateFilesystem);
             }
             if !filesystem.external.is_empty() {
-                result.push(format!("用户选择文件: {:?}", filesystem.external));
+                result.push(NativePermissionSummary::ExternalFilesystem {
+                    access: filesystem
+                        .external
+                        .iter()
+                        .map(|value| format!("{value:?}").to_ascii_lowercase())
+                        .collect(),
+                });
             }
         }
         if let Some(process) = &self.process {
             if !process.url_schemes.is_empty() {
-                result.push(format!("打开 URL: {}", process.url_schemes.join(", ")));
+                result.push(NativePermissionSummary::UrlSchemes {
+                    schemes: process.url_schemes.clone(),
+                });
             }
             if process.executable_grants {
-                result.push("运行用户选择的程序".into());
+                result.push(NativePermissionSummary::ExecutableGrants);
             }
         }
         result.extend(
             self.registry
                 .iter()
-                .map(|scope| format!("{}\\{} ({:?})", scope.hive.label(), scope.key, scope.access)),
+                .map(|scope| NativePermissionSummary::Registry {
+                    hive: scope.hive.label().into(),
+                    key: scope.key.clone(),
+                    access: match scope.access {
+                        RegistryAccess::Read => "read",
+                        RegistryAccess::ReadWrite => "read_write",
+                    }
+                    .into(),
+                }),
         );
         if !self.tray.is_empty() {
-            result.push(format!("托盘菜单: {} 项", self.tray.len()));
+            result.push(NativePermissionSummary::Tray {
+                count: self.tray.len(),
+            });
         }
         if !self.shortcuts.is_empty() {
-            result.push(format!("全局快捷键: {} 项", self.shortcuts.len()));
+            result.push(NativePermissionSummary::Shortcuts {
+                count: self.shortcuts.len(),
+            });
         }
         result
     }
@@ -354,15 +393,6 @@ fn is_contribution_id(value: &str) -> bool {
         })
 }
 
-fn validate_text(value: &str, label: &str, max_length: usize) -> Result<(), String> {
-    if value.trim().is_empty() || value.len() > max_length || value.chars().any(char::is_control) {
-        return Err(format!(
-            "{label} must be non-empty and at most {max_length} bytes"
-        ));
-    }
-    Ok(())
-}
-
 fn validate_accelerator(value: &str) -> Result<(), String> {
     if value.len() > 64 || !value.contains('+') || value.chars().any(char::is_control) {
         return Err(format!("invalid shortcut accelerator: {value}"));
@@ -482,6 +512,13 @@ fn validate_module_id(module_id: &str) -> Result<(), String> {
 mod tests {
     use super::*;
 
+    fn text(zh_cn: &str, en: &str) -> LocalizedText {
+        LocalizedText {
+            zh_cn: zh_cn.into(),
+            en: en.into(),
+        }
+    }
+
     fn capabilities() -> NativeCapabilities {
         NativeCapabilities {
             filesystem: Some(FilesystemCapability {
@@ -499,13 +536,13 @@ mod tests {
             }],
             tray: vec![TrayItemDeclaration {
                 id: "open-main".into(),
-                label: "Open".into(),
+                label: Some(text("打开", "Open")),
                 kind: TrayItemKind::Button,
                 order: 10,
             }],
             shortcuts: vec![ShortcutDeclaration {
                 id: "show-main".into(),
-                description: "Show main window".into(),
+                description: text("显示主窗口", "Show main window"),
                 accelerator: "Ctrl+Shift+M".into(),
             }],
         }
@@ -521,7 +558,10 @@ mod tests {
 
         assert_eq!(first, second);
         assert_eq!(first.fingerprint(), second.fingerprint());
-        assert!(first.summary().iter().any(|line| line.contains("HKCU")));
+        assert!(first.summary().iter().any(|item| matches!(
+            item,
+            NativePermissionSummary::Registry { hive, .. } if hive == "HKCU"
+        )));
     }
 
     #[test]

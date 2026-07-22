@@ -1,7 +1,8 @@
 import type { SelectSetting, SwitchSetting } from "@/core/settings/setting-types";
 import type { NavigationGroup } from "@/core/features/feature-types";
+import { isLocalizedText, type LocalizedText } from "@/core/i18n/localized-text";
 
-export const RUNTIME_MODULE_SCHEMA_VERSION = 1;
+export const RUNTIME_MODULE_SCHEMA_VERSION = 2;
 export const RUNTIME_MODULE_SDK_VERSION = 3;
 
 export type RuntimeExternalFileAccess = "read" | "write" | "list";
@@ -11,14 +12,14 @@ export interface RuntimeNativeCapabilities {
   filesystem: { private: boolean; external: RuntimeExternalFileAccess[] } | null;
   process: { urlSchemes: string[]; executableGrants: boolean } | null;
   registry: Array<{ hive: "HKCU" | "HKLM"; key: string; access: RuntimeRegistryAccess }>;
-  tray: Array<{ id: string; label: string; kind: "button" | "check" | "separator"; order: number }>;
-  shortcuts: Array<{ id: string; description: string; accelerator: string }>;
+  tray: Array<{ id: string; label?: LocalizedText; kind: "button" | "check" | "separator"; order: number }>;
+  shortcuts: Array<{ id: string; description: LocalizedText; accelerator: string }>;
 }
 
 export interface RuntimeNavigationManifest {
   id: string;
-  title: string;
-  description?: string;
+  title: LocalizedText;
+  description?: LocalizedText;
   element: string;
   group?: NavigationGroup;
   order?: number;
@@ -37,13 +38,13 @@ export interface RuntimeModuleDependencies {
 }
 
 export interface RuntimeModuleManifest {
-  schemaVersion: 1;
+  schemaVersion: 2;
   id: string;
-  name: string;
-  description: string;
+  name: LocalizedText;
+  description: LocalizedText;
   version: string;
   hostVersion: string;
-  sdkVersion: 1 | 2 | 3;
+  sdkVersion: 2 | 3;
   entry: string;
   dependencies: RuntimeModuleDependencies;
   navigation: RuntimeNavigationManifest[];
@@ -69,8 +70,16 @@ function string(value: unknown, label: string, maxLength = 200) {
   return value;
 }
 
-function optionalString(value: unknown, label: string) {
-  return value === undefined ? undefined : string(value, label);
+function localizedText(value: unknown, label: string, maxLength = 200): LocalizedText {
+  if (!isLocalizedText(value)) throw new Error(`${label} must contain non-empty zh-CN and en text only.`);
+  if (value["zh-CN"].length > maxLength || value.en.length > maxLength) {
+    throw new Error(`${label} translations must be at most ${maxLength} characters.`);
+  }
+  return { "zh-CN": value["zh-CN"], en: value.en };
+}
+
+function optionalLocalizedText(value: unknown, label: string, maxLength = 200) {
+  return value === undefined ? undefined : localizedText(value, label, maxLength);
 }
 
 function parseNativeCapabilities(value: unknown): RuntimeNativeCapabilities {
@@ -130,7 +139,9 @@ function parseNativeCapabilities(value: unknown): RuntimeNativeCapabilities {
     if (typeof item.order !== "number" || !Number.isInteger(item.order)) throw new Error("Invalid tray item order.");
     return {
       id: string(item.id, `nativeCapabilities.tray[${index}].id`, 64),
-      label: kind === "separator" ? String(item.label ?? "") : string(item.label, `nativeCapabilities.tray[${index}].label`, 120),
+      label: kind === "separator"
+        ? undefined
+        : localizedText(item.label, `nativeCapabilities.tray[${index}].label`, 120),
       kind,
       order: item.order,
     };
@@ -141,7 +152,7 @@ function parseNativeCapabilities(value: unknown): RuntimeNativeCapabilities {
     if (!accelerator.includes("+")) throw new Error("Invalid shortcut accelerator.");
     return {
       id: string(item.id, `nativeCapabilities.shortcuts[${index}].id`, 64),
-      description: string(item.description, `nativeCapabilities.shortcuts[${index}].description`),
+      description: localizedText(item.description, `nativeCapabilities.shortcuts[${index}].description`),
       accelerator,
     };
   });
@@ -202,8 +213,8 @@ function parseNavigation(value: unknown, moduleId: string): RuntimeNavigationMan
 
     return {
       id,
-      title: string(entry.title, `navigation[${index}].title`),
-      description: optionalString(entry.description, `navigation[${index}].description`),
+      title: localizedText(entry.title, `navigation[${index}].title`),
+      description: optionalLocalizedText(entry.description, `navigation[${index}].description`, 500),
       element,
       group,
       order: entry.order as number | undefined,
@@ -222,8 +233,8 @@ function parseSettings(value: unknown): RuntimeSettingManifest[] {
     ids.add(id);
     const base = {
       id,
-      label: string(setting.label, `setting[${index}].label`),
-      description: optionalString(setting.description, `setting[${index}].description`),
+      label: localizedText(setting.label, `setting[${index}].label`),
+      description: optionalLocalizedText(setting.description, `setting[${index}].description`, 500),
       group: string(setting.group, `setting[${index}].group`, 64),
       order: setting.order as number | undefined,
     };
@@ -239,7 +250,7 @@ function parseSettings(value: unknown): RuntimeSettingManifest[] {
       const options = setting.options.map((option, optionIndex) => {
         const parsed = object(option, `setting[${index}].options[${optionIndex}]`);
         return {
-          label: string(parsed.label, `setting[${index}].options[${optionIndex}].label`),
+          label: localizedText(parsed.label, `setting[${index}].options[${optionIndex}].label`),
           value: string(parsed.value, `setting[${index}].options[${optionIndex}].value`),
         };
       });
@@ -260,7 +271,7 @@ export function parseRuntimeModuleManifest(value: unknown): RuntimeModuleManifes
   const version = string(manifest.version, "module version", 64);
   if (!semverPattern.test(version)) throw new Error(`Invalid module version: ${version}`);
   if (manifest.schemaVersion !== RUNTIME_MODULE_SCHEMA_VERSION) throw new Error("Unsupported module schema version.");
-  if (manifest.sdkVersion !== 1 && manifest.sdkVersion !== 2 && manifest.sdkVersion !== RUNTIME_MODULE_SDK_VERSION) {
+  if (manifest.sdkVersion !== 2 && manifest.sdkVersion !== RUNTIME_MODULE_SDK_VERSION) {
     throw new Error("Unsupported module SDK version.");
   }
   const sdkVersion = manifest.sdkVersion;
@@ -277,8 +288,8 @@ export function parseRuntimeModuleManifest(value: unknown): RuntimeModuleManifes
   return {
     schemaVersion: RUNTIME_MODULE_SCHEMA_VERSION,
     id,
-    name: string(manifest.name, "module name"),
-    description: string(manifest.description, "module description", 500),
+    name: localizedText(manifest.name, "module name"),
+    description: localizedText(manifest.description, "module description", 500),
     version,
     hostVersion: string(manifest.hostVersion, "host version range", 100),
     sdkVersion,

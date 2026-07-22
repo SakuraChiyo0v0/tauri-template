@@ -2,23 +2,25 @@ import { describe, expect, it } from "vitest";
 import type { RegisteredFeature } from "@/core/features/feature-types";
 import { getModuleManagementState } from "./runtime-module-management";
 
+const text = (value: string) => ({ "zh-CN": value, en: value });
+
 function feature(overrides: Partial<RegisteredFeature> = {}): RegisteredFeature {
   return {
     id: "hello-module",
-    name: "Hello",
-    description: "Hello module",
+    name: text("Hello"),
+    description: text("Hello module"),
     version: "1.0.0",
     defaultEnabled: true,
     source: "runtime",
     runtime: {
       manifest: {
-        schemaVersion: 1,
+        schemaVersion: 2,
         id: "hello-module",
-        name: "Hello",
-        description: "Hello module",
+        name: text("Hello"),
+        description: text("Hello module"),
         version: "1.0.0",
         hostVersion: "^0.1.0",
-        sdkVersion: 1,
+        sdkVersion: 2,
         entry: "index.js",
         dependencies: { required: [], optional: [] },
         navigation: [],
@@ -132,14 +134,20 @@ describe("module management state", () => {
         status: "waiting",
         permissionStatus: "awaiting_approval",
         permissionVersion: "2.0.0",
-        nativePermissionSummary: ["模块私有文件", "打开 URL: https"],
+        nativePermissionSummary: [
+          { kind: "private_filesystem" },
+          { kind: "url_schemes", schemes: ["https"] },
+        ],
         nativePermissionFingerprint: "permission-fingerprint",
       },
     }), false);
 
     expect(state).toMatchObject({
       statusLabel: "等待权限",
-      permissionSummary: ["模块私有文件", "打开 URL: https"],
+      permissionSummary: [
+        { kind: "private_filesystem" },
+        { kind: "url_schemes", schemes: ["https"] },
+      ],
       canApprovePermissions: true,
       canRevokePermissions: false,
       permissionVersion: "2.0.0",

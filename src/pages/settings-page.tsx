@@ -1,4 +1,4 @@
-import { Palette, SlidersHorizontal } from "lucide-react";
+import { Languages, Palette, SlidersHorizontal } from "lucide-react";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Label } from "@/components/ui/label";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
@@ -7,14 +7,17 @@ import { featureRegistry } from "@/app/feature-registry";
 import { useFeatureStateSnapshot } from "@/core/features/feature-state";
 import { useSetting } from "@/core/settings/setting-store";
 import type { ResolvedSetting } from "@/core/settings/setting-types";
+import { useI18n } from "@/core/i18n/use-i18n";
+import type { MessageKey } from "@/core/i18n/messages";
+import type { SupportedLocale } from "@/core/i18n/locale-store";
 import { ThemeControls } from "@/themes/theme-controls";
 
-const groupLabels: Record<string, string> = {
-  general: "常规",
-  appearance: "外观",
-  features: "功能",
-  diagnostics: "诊断",
-  advanced: "高级",
+const groupLabels: Record<string, MessageKey> = {
+  general: "settings.group.general",
+  appearance: "settings.group.appearance",
+  features: "settings.group.features",
+  diagnostics: "settings.group.diagnostics",
+  advanced: "settings.group.advanced",
 };
 
 function SettingField({ setting }: { setting: ResolvedSetting }) {
@@ -72,8 +75,9 @@ function SelectSettingField({ setting }: { setting: Extract<ResolvedSetting, { t
 }
 
 export function SettingsPage() {
+  const { locale, setLocale, t } = useI18n();
   useFeatureStateSnapshot();
-  const settings = featureRegistry.getSettings();
+  const settings = featureRegistry.getSettings(locale);
   const groups = settings.reduce<Map<string, ResolvedSetting[]>>((result, setting) => {
     result.set(setting.group, [...(result.get(setting.group) ?? []), setting]);
     return result;
@@ -83,8 +87,30 @@ export function SettingsPage() {
     <section className="space-y-5">
       <Card>
         <CardHeader>
-          <div className="flex items-center gap-2"><Palette className="size-4 text-primary" /><CardTitle>外观</CardTitle></div>
-          <CardDescription>显示模式和配色预设会同步到所有语义化组件。</CardDescription>
+          <div className="flex items-center gap-2"><Languages className="size-4 text-primary" /><CardTitle>{t("settings.languageTitle")}</CardTitle></div>
+          <CardDescription>{t("settings.languageDescription")}</CardDescription>
+        </CardHeader>
+        <CardContent>
+          <div className="flex items-center justify-between gap-6 py-1">
+            <div className="space-y-1">
+              <Label htmlFor="application-locale">{t("settings.languageLabel")}</Label>
+              <p className="text-sm text-muted-foreground">{t("settings.languageHint")}</p>
+            </div>
+            <Select value={locale} onValueChange={(value) => setLocale(value as SupportedLocale)}>
+              <SelectTrigger id="application-locale" className="w-44"><SelectValue /></SelectTrigger>
+              <SelectContent>
+                <SelectItem value="zh-CN">{t("settings.languageChinese")}</SelectItem>
+                <SelectItem value="en">{t("settings.languageEnglish")}</SelectItem>
+              </SelectContent>
+            </Select>
+          </div>
+        </CardContent>
+      </Card>
+
+      <Card>
+        <CardHeader>
+          <div className="flex items-center gap-2"><Palette className="size-4 text-primary" /><CardTitle>{t("settings.appearance")}</CardTitle></div>
+          <CardDescription>{t("settings.appearanceDescription")}</CardDescription>
         </CardHeader>
         <CardContent><ThemeControls /></CardContent>
       </Card>
@@ -92,8 +118,8 @@ export function SettingsPage() {
       {[...groups.entries()].map(([group, contributions]) => (
         <Card key={group}>
           <CardHeader>
-            <div className="flex items-center gap-2"><SlidersHorizontal className="size-4 text-primary" /><CardTitle>{groupLabels[group] ?? group}</CardTitle></div>
-            <CardDescription>由 {new Set(contributions.map((item) => item.moduleName)).size} 个已启用模块提供</CardDescription>
+            <div className="flex items-center gap-2"><SlidersHorizontal className="size-4 text-primary" /><CardTitle>{groupLabels[group] ? t(groupLabels[group]) : contributions[0]?.moduleName ?? group}</CardTitle></div>
+            <CardDescription>{t("settings.providerCount", { count: new Set(contributions.map((item) => item.moduleName)).size })}</CardDescription>
           </CardHeader>
           <CardContent className="divide-y divide-border">
             {contributions.map((setting) => <SettingField key={`${setting.moduleId}:${setting.id}`} setting={setting} />)}

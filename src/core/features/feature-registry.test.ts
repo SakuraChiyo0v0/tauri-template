@@ -2,6 +2,8 @@ import { describe, expect, it, vi } from "vitest";
 import { FeatureRegistry } from "./feature-registry";
 import { defineFeature } from "./feature-types";
 
+const text = (value: string) => ({ "zh-CN": value, en: value });
+
 function EmptyPage() {
   return null;
 }
@@ -9,8 +11,8 @@ function EmptyPage() {
 function createFeature(id: string) {
   return defineFeature({
     id,
-    name: "测试模块",
-    description: "用于验证注册表行为",
+    name: text("测试模块"),
+    description: text("用于验证注册表行为"),
     version: "1.0.0",
     defaultEnabled: true,
     settings: [
@@ -18,7 +20,7 @@ function createFeature(id: string) {
         id: "enabledOption",
         type: "switch",
         group: "features",
-        label: "测试设置",
+        label: text("测试设置"),
         defaultValue: true,
       },
     ],
@@ -26,6 +28,34 @@ function createFeature(id: string) {
 }
 
 describe("FeatureRegistry", () => {
+  it("resolves module contributions in the requested language", () => {
+    const registry = new FeatureRegistry().register(defineFeature({
+      id: "localized-feature",
+      name: { "zh-CN": "双语模块", en: "Bilingual module" },
+      description: { "zh-CN": "中文说明", en: "English description" },
+      version: "1.0.0",
+      defaultEnabled: true,
+      navigation: [{
+        id: "localized-page",
+        title: { "zh-CN": "页面", en: "Page" },
+        icon: () => null,
+        component: EmptyPage,
+      }],
+      settings: [{
+        id: "localized-select",
+        type: "select",
+        group: "general",
+        label: { "zh-CN": "选项", en: "Option" },
+        defaultValue: "one",
+        options: [{ value: "one", label: { "zh-CN": "一", en: "One" } }],
+      }],
+    }));
+
+    expect(registry.getNavigation("zh-CN")[0]).toMatchObject({ title: "页面", moduleName: "双语模块" });
+    expect(registry.getNavigation("en")[0]).toMatchObject({ title: "Page", moduleName: "Bilingual module" });
+    expect(registry.getSettings("en")[0]).toMatchObject({ label: "Option", options: [{ label: "One" }] });
+  });
+
   it("collects settings from enabled modules without coupling to the settings page", () => {
     const registry = new FeatureRegistry().register(createFeature("registry-collect-test"));
 
@@ -53,24 +83,24 @@ describe("FeatureRegistry", () => {
     const registry = new FeatureRegistry()
       .register(defineFeature({
         id: "navigation-main-test",
-        name: "主功能",
-        description: "主导航测试",
+        name: text("主功能"),
+        description: text("主导航测试"),
         version: "1.0.0",
         defaultEnabled: true,
         navigation: [
-          { id: "later", title: "稍后", icon: () => null, component: EmptyPage, order: 20 },
-          { id: "earlier", title: "优先", icon: () => null, component: EmptyPage, order: 10 },
+          { id: "later", title: text("稍后"), icon: () => null, component: EmptyPage, order: 20 },
+          { id: "earlier", title: text("优先"), icon: () => null, component: EmptyPage, order: 10 },
         ],
       }))
       .register(defineFeature({
         id: "navigation-system-test",
-        name: "系统功能",
-        description: "系统导航测试",
+        name: text("系统功能"),
+        description: text("系统导航测试"),
         version: "1.0.0",
         defaultEnabled: true,
         hiddenFromManager: true,
         navigation: [
-          { id: "settings-test", title: "设置", icon: () => null, component: EmptyPage, group: "system" },
+          { id: "settings-test", title: text("设置"), icon: () => null, component: EmptyPage, group: "system" },
         ],
       }));
 
@@ -81,12 +111,12 @@ describe("FeatureRegistry", () => {
   it("removes navigation when its module is disabled", async () => {
     const feature = defineFeature({
       id: "navigation-disable-test",
-      name: "可停用页面",
-      description: "导航停用测试",
+      name: text("可停用页面"),
+      description: text("导航停用测试"),
       version: "1.0.0",
       defaultEnabled: true,
       navigation: [
-        { id: "removable-page", title: "可移除页面", icon: () => null, component: EmptyPage },
+        { id: "removable-page", title: text("可移除页面"), icon: () => null, component: EmptyPage },
       ],
     });
     const registry = new FeatureRegistry().register(feature);
@@ -128,11 +158,11 @@ describe("FeatureRegistry", () => {
   it("keeps existing registrations unchanged when a runtime contribution conflicts", () => {
     const registry = new FeatureRegistry().register(defineFeature({
       id: "existing-navigation-test",
-      name: "Existing",
-      description: "Existing navigation",
+      name: text("Existing"),
+      description: text("Existing navigation"),
       version: "1.0.0",
       defaultEnabled: true,
-      navigation: [{ id: "shared-navigation", title: "Existing", icon: () => null, component: EmptyPage }],
+      navigation: [{ id: "shared-navigation", title: text("Existing"), icon: () => null, component: EmptyPage }],
     }));
     const listener = vi.fn();
     registry.subscribe(listener);
@@ -140,11 +170,11 @@ describe("FeatureRegistry", () => {
     expect(() => registry.register(defineFeature({
       id: "conflicting-runtime-test",
       source: "runtime",
-      name: "Conflict",
-      description: "Conflicting navigation",
+      name: text("Conflict"),
+      description: text("Conflicting navigation"),
       version: "1.0.0",
       defaultEnabled: true,
-      navigation: [{ id: "shared-navigation", title: "Conflict", icon: () => null, component: EmptyPage }],
+      navigation: [{ id: "shared-navigation", title: text("Conflict"), icon: () => null, component: EmptyPage }],
     }))).toThrow(/already registered/);
     expect(registry.getAll().map((feature) => feature.id)).toEqual(["existing-navigation-test"]);
     expect(listener).not.toHaveBeenCalled();

@@ -3,6 +3,7 @@ use std::{collections::BTreeMap, sync::Mutex};
 use serde::{Deserialize, Serialize};
 
 use super::permissions::{NativeCapabilities, TrayItemDeclaration, TrayItemKind};
+use crate::features::runtime_modules::manifest::LocalizedText;
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
@@ -21,6 +22,8 @@ pub struct TrayItemState {
     pub order: i32,
     pub enabled: bool,
     pub checked: bool,
+    #[serde(skip)]
+    localized_label: Option<LocalizedText>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -71,13 +74,20 @@ impl TrayRegistry {
         }
         let items = normalized
             .into_iter()
-            .map(|item| TrayItemState {
-                id: item.id,
-                label: item.label,
-                kind: item.kind,
-                order: item.order,
-                enabled: true,
-                checked: false,
+            .map(|item| {
+                let label = item.label;
+                TrayItemState {
+                    id: item.id,
+                    label: label
+                        .as_ref()
+                        .map(|value| value.zh_cn.clone())
+                        .unwrap_or_default(),
+                    kind: item.kind,
+                    order: item.order,
+                    enabled: true,
+                    checked: false,
+                    localized_label: label,
+                }
             })
             .collect();
         modules.insert(
@@ -96,6 +106,26 @@ impl TrayRegistry {
             .lock()
             .map(|modules| modules.values().cloned().collect())
             .unwrap_or_default()
+    }
+
+    pub fn set_locale(&self, locale: &str) -> Result<(), String> {
+        if !matches!(locale, "zh-CN" | "en") {
+            return Err(format!("unsupported application locale: {locale}"));
+        }
+        let mut modules = self
+            .modules
+            .lock()
+            .map_err(|_| "tray registry lock poisoned")?;
+        for item in modules.values_mut().flat_map(|group| &mut group.items) {
+            if let Some(label) = &item.localized_label {
+                item.label = if locale == "en" {
+                    label.en.clone()
+                } else {
+                    label.zh_cn.clone()
+                };
+            }
+        }
+        Ok(())
     }
 
     pub fn route_click(&self, namespaced_id: &str) -> Result<TrayEvent, String> {
@@ -153,6 +183,7 @@ impl TrayRegistry {
                 return Err("invalid tray item label".into());
             }
             item.label = label;
+            item.localized_label = None;
         }
         if let Some(enabled) = update.enabled {
             item.enabled = enabled;
@@ -177,18 +208,26 @@ impl TrayRegistry {
 mod tests {
     use super::*;
     use crate::features::native_capabilities::permissions::{TrayItemDeclaration, TrayItemKind};
+    use crate::features::runtime_modules::manifest::LocalizedText;
+
+    fn text(zh_cn: &str, en: &str) -> LocalizedText {
+        LocalizedText {
+            zh_cn: zh_cn.into(),
+            en: en.into(),
+        }
+    }
 
     fn items() -> Vec<TrayItemDeclaration> {
         vec![
             TrayItemDeclaration {
                 id: "open-main".into(),
-                label: "Open".into(),
+                label: Some(text("打开", "Open")),
                 kind: TrayItemKind::Button,
                 order: 10,
             },
             TrayItemDeclaration {
                 id: "watch-mode".into(),
-                label: "Watch".into(),
+                label: Some(text("监视", "Watch")),
                 kind: TrayItemKind::Check,
                 order: 20,
             },
@@ -207,7 +246,7 @@ mod tests {
                 "beta-token",
                 vec![TrayItemDeclaration {
                     id: "open-main".into(),
-                    label: "Beta".into(),
+                    label: Some(text("Beta", "Beta")),
                     kind: TrayItemKind::Button,
                     order: 5,
                 }],
@@ -285,12 +324,36 @@ mod tests {
                 "alpha-token",
                 vec![TrayItemDeclaration {
                     id: "divider".into(),
-                    label: String::new(),
+                    label: None,
                     kind: TrayItemKind::Separator,
                     order: 0,
                 }],
             )
             .unwrap();
         assert!(registry.route_click("alpha-module::divider").is_err());
+    }
+
+    #[test]
+    fn switches_declared_labels_but_preserves_runtime_overrides() {
+        let registry = TrayRegistry::default();
+        registry
+            .activate_module("alpha-module", "alpha-token", items())
+            .unwrap();
+        registry.set_locale("en").unwrap();
+        assert_eq!(registry.snapshot()[0].items[0].label, "Open");
+
+        registry
+            .update(
+                "alpha-token",
+                "open-main",
+                TrayItemUpdate {
+                    label: Some("Custom".into()),
+                    ..TrayItemUpdate::default()
+                },
+            )
+            .unwrap();
+        registry.set_locale("zh-CN").unwrap();
+        assert_eq!(registry.snapshot()[0].items[0].label, "Custom");
+        assert!(registry.set_locale("ja").is_err());
     }
 }

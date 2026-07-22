@@ -9,23 +9,25 @@ import {
   type RuntimeModuleLoaderDependencies,
 } from "./runtime-module-loader";
 
+const text = (value: string) => ({ "zh-CN": value, en: value });
+
 function installedModule(): InstalledRuntimeModule {
   return {
     manifest: {
-      schemaVersion: 1,
+      schemaVersion: 2,
       id: "hello-module",
-      name: "Hello module",
-      description: "A runtime test module",
+      name: text("Hello module"),
+      description: text("A runtime test module"),
       version: "1.0.0",
       hostVersion: "^0.1.0",
-      sdkVersion: 1,
+      sdkVersion: 2,
       entry: "index.js",
       dependencies: { required: [], optional: [] },
       navigation: [
         {
           id: "hello-page",
-          title: "Hello",
-          description: "Runtime page",
+          title: text("Hello"),
+          description: text("Runtime page"),
           element: "hello-module-page",
           group: "main",
           order: 10,
@@ -36,7 +38,7 @@ function installedModule(): InstalledRuntimeModule {
           id: "showGreeting",
           type: "switch",
           group: "hello",
-          label: "Show greeting",
+          label: text("Show greeting"),
           defaultValue: true,
         },
       ],
@@ -65,7 +67,7 @@ function installedModule(): InstalledRuntimeModule {
 
 function sdk(): RuntimeModuleHostSdk {
   return {
-    sdkVersion: 1,
+    sdkVersion: 2,
     hostVersion: "0.1.0",
     module: { id: "hello-module", version: "1.0.0" },
     logger: {
@@ -73,6 +75,10 @@ function sdk(): RuntimeModuleHostSdk {
     },
     settings: { get: (_id, fallback) => fallback, set: vi.fn(), subscribe: vi.fn(() => vi.fn()) },
     theme: { get: () => ({ mode: "system", preset: "neutral" }), subscribe: vi.fn(() => vi.fn()) },
+    i18n: { getLocale: () => "zh-CN", subscribe: vi.fn(() => vi.fn()) },
+    database: {
+      execute: vi.fn(), select: vi.fn(), transaction: vi.fn(), getUserVersion: vi.fn(), setUserVersion: vi.fn(),
+    },
   };
 }
 
@@ -106,7 +112,7 @@ function runtimeModule(id: string, requiredDependencies: string[] = []): Install
     manifest: {
       ...base.manifest,
       id,
-      name: id,
+      name: text(id),
       navigation: [],
       settings: [],
       dependencies: {
@@ -166,7 +172,7 @@ describe("runtime module loader", () => {
     await activateRuntimeModule(installedModule(), deps);
 
     expect(activate).toHaveBeenCalledWith(expect.objectContaining({
-      sdkVersion: 1,
+      sdkVersion: 2,
       module: { id: "hello-module", version: "1.0.0" },
     }));
   });
@@ -201,8 +207,8 @@ describe("runtime module loader", () => {
   it("leaves builtin features available when no runtime module is installed", async () => {
     const registry = new FeatureRegistry().register({
       id: "builtin-shell",
-      name: "Shell",
-      description: "Builtin shell",
+      name: text("Shell"),
+      description: text("Builtin shell"),
       version: "1.0.0",
       defaultEnabled: true,
     });

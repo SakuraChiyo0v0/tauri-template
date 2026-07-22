@@ -6,6 +6,7 @@ Read this file before changing the project. Keep the template free of demo busin
 
 - `src/components/ui` contains reusable, business-neutral UI primitives.
 - `src/themes` owns semantic design tokens and theme selection.
+- `src/core/i18n` owns the supported locale union, persistence, base messages, and localized-text resolution.
 - `src/core` owns stable extension contracts and persistence helpers.
 - `src/features/<feature>` owns one removable feature and its settings contributions.
 - `src/app/module-registry.ts` is the only source-module installation list.
@@ -16,6 +17,7 @@ Read this file before changing the project. Keep the template free of demo busin
 ## Change rules
 
 - Add business capabilities as feature modules; do not place them in `App.tsx`, settings pages, or UI primitives.
+- Every source or runtime module contribution rendered by the host must provide non-empty `zh-CN` and `en` text. Module-owned pages must follow the base locale without reactivation.
 - A feature must export one `defineFeature(...)` manifest from its `index.ts`.
 - Contribute sidebar pages through `navigation`; never hard-code feature routes in `App.tsx`.
 - Contribute settings through the feature manifest. Never add feature-specific conditions to `SettingsPage`.

@@ -431,7 +431,7 @@ mod tests {
 
     use super::{ResolveRequest, resolve};
     use crate::features::runtime_modules::{
-        manifest::{RuntimeModuleDependencies, RuntimeModuleDependency, RuntimeModuleManifest},
+        manifest::{LocalizedText, RuntimeModuleDependencies, RuntimeModuleDependency, RuntimeModuleManifest},
         types::RuntimeModuleDiagnosticCode,
     };
 
@@ -442,13 +442,16 @@ mod tests {
         optional: &[(&str, &str)],
     ) -> RuntimeModuleManifest {
         RuntimeModuleManifest {
-            schema_version: 1,
+            schema_version: 2,
             id: id.into(),
-            name: id.into(),
-            description: format!("{id} test module"),
+            name: LocalizedText { zh_cn: id.into(), en: id.into() },
+            description: LocalizedText {
+                zh_cn: format!("{id} 测试模块"),
+                en: format!("{id} test module"),
+            },
             version: version.into(),
             host_version: "^0.1.0".into(),
-            sdk_version: 1,
+            sdk_version: 2,
             entry: "index.js".into(),
             dependencies: RuntimeModuleDependencies {
                 required: required
