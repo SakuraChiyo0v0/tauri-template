@@ -12,7 +12,9 @@ use std::{
 
 use semver::Version;
 use serde_json::Value;
-use tauri::{AppHandle, Manager};
+use tauri::{AppHandle, Manager, State};
+
+use crate::features::native_capabilities::runtime::NativeRuntimeState;
 
 use database::{
     DatabaseExecuteResult, DatabaseStatement, ModuleDataInventoryItem, ModuleDatabaseManager,
@@ -22,7 +24,7 @@ use store::{
 };
 use types::{RuntimeModuleCommandError, RuntimeModuleStatus};
 
-fn module_store(app: &AppHandle) -> Result<ModuleStore, String> {
+pub(crate) fn module_store(app: &AppHandle) -> Result<ModuleStore, String> {
     let root = app
         .path()
         .app_data_dir()
@@ -49,9 +51,9 @@ fn require_active_database_module(app: &AppHandle, module_id: &str) -> Result<()
         .iter()
         .find(|module| module.manifest.id == module_id)
         .ok_or_else(|| format!("runtime module is not installed: {module_id}"))?;
-    if module.manifest.sdk_version != 2 {
+    if module.manifest.sdk_version != 2 && module.manifest.sdk_version != 3 {
         return Err(format!(
-            "runtime module does not use Host SDK V2: {module_id}"
+            "runtime module does not use Host SDK V2 or V3: {module_id}"
         ));
     }
     if module.status != RuntimeModuleStatus::Active {
@@ -71,9 +73,37 @@ pub fn list_runtime_modules(
 #[tauri::command]
 pub fn install_runtime_module(
     app: AppHandle,
+    native: State<'_, NativeRuntimeState>,
     package_path: String,
 ) -> Result<RuntimeModuleOperationResult, String> {
-    module_store(&app)?.install_with_plan(Path::new(&package_path))
+    let result = module_store(&app)?.install_with_plan(Path::new(&package_path))?;
+    if result.plan_changed {
+        native.release_module(&result.module_id);
+    }
+    Ok(result)
+}
+
+#[tauri::command]
+pub fn approve_runtime_module_native_permissions(
+    app: AppHandle,
+    native: State<'_, NativeRuntimeState>,
+    module_id: String,
+    version: String,
+) -> Result<RuntimeModuleOperationResult, String> {
+    let result = module_store(&app)?.approve_native_permissions(&module_id, &version)?;
+    native.release_module(&module_id);
+    Ok(result)
+}
+
+#[tauri::command]
+pub fn revoke_runtime_module_native_permissions(
+    app: AppHandle,
+    native: State<'_, NativeRuntimeState>,
+    module_id: String,
+) -> Result<RuntimeModuleOperationResult, String> {
+    let result = module_store(&app)?.revoke_native_permissions(&module_id)?;
+    native.release_module(&module_id);
+    Ok(result)
 }
 
 #[tauri::command]
@@ -87,42 +117,60 @@ pub fn read_runtime_module_entry(
 #[tauri::command]
 pub fn rollback_runtime_module(
     app: AppHandle,
+    native: State<'_, NativeRuntimeState>,
     module_id: String,
 ) -> Result<RuntimeModuleOperationResult, RuntimeModuleCommandError> {
-    module_store(&app)
+    let result = module_store(&app)
         .map_err(RuntimeModuleCommandError::from)?
-        .rollback_with_plan(&module_id)
+        .rollback_with_plan(&module_id)?;
+    native.release_module(&module_id);
+    Ok(result)
 }
 
 #[tauri::command]
 pub fn set_runtime_module_enabled(
     app: AppHandle,
+    native: State<'_, NativeRuntimeState>,
     module_id: String,
     enabled: bool,
 ) -> Result<RuntimeModuleOperationResult, RuntimeModuleCommandError> {
-    module_store(&app)
+    let result = module_store(&app)
         .map_err(RuntimeModuleCommandError::from)?
-        .set_enabled(&module_id, enabled)
+        .set_enabled(&module_id, enabled)?;
+    if !enabled {
+        native.release_module(&module_id);
+    }
+    Ok(result)
 }
 
 #[tauri::command]
 pub fn report_runtime_module_activation_failure(
     app: AppHandle,
+    native: State<'_, NativeRuntimeState>,
     module_id: String,
     failed_version: String,
     message: String,
 ) -> Result<RuntimeModuleOperationResult, String> {
-    module_store(&app)?.report_activation_failure_with_plan(&module_id, &failed_version, &message)
+    let result = module_store(&app)?.report_activation_failure_with_plan(
+        &module_id,
+        &failed_version,
+        &message,
+    )?;
+    native.release_module(&module_id);
+    Ok(result)
 }
 
 #[tauri::command]
 pub fn uninstall_runtime_module(
     app: AppHandle,
+    native: State<'_, NativeRuntimeState>,
     module_id: String,
 ) -> Result<RuntimeModuleOperationResult, RuntimeModuleCommandError> {
-    module_store(&app)
+    let result = module_store(&app)
         .map_err(RuntimeModuleCommandError::from)?
-        .uninstall_with_plan(&module_id)
+        .uninstall_with_plan(&module_id)?;
+    native.release_module(&module_id);
+    Ok(result)
 }
 
 #[tauri::command]

@@ -21,6 +21,7 @@ pub struct ShortcutStatus {
     pub state: ShortcutState,
 }
 
+#[cfg(test)]
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
 pub struct ShortcutEvent {
@@ -37,6 +38,7 @@ struct ShortcutOwner {
 
 #[derive(Debug, Clone)]
 struct ActiveModule {
+    #[cfg(test)]
     session_token: String,
     statuses: BTreeMap<String, ShortcutStatus>,
 }
@@ -66,6 +68,39 @@ pub struct ShortcutRegistry {
 }
 
 impl ShortcutRegistry {
+    pub fn statuses(&self, module_id: &str) -> Result<Vec<ShortcutStatus>, String> {
+        let runtime = self
+            .runtime
+            .lock()
+            .map_err(|_| "shortcut registry lock poisoned")?;
+        let module = runtime
+            .modules
+            .get(module_id)
+            .ok_or_else(|| format!("shortcut module is not active: {module_id}"))?;
+        Ok(module.statuses.values().cloned().collect())
+    }
+
+    pub fn mark_conflict(&self, module_id: &str, shortcut_id: &str) -> Result<(), String> {
+        let mut runtime = self
+            .runtime
+            .lock()
+            .map_err(|_| "shortcut registry lock poisoned")?;
+        let current = runtime
+            .modules
+            .get(module_id)
+            .and_then(|module| module.statuses.get(shortcut_id))
+            .cloned()
+            .ok_or_else(|| format!("shortcut is not declared: {module_id}::{shortcut_id}"))?;
+        release_if_owned(&mut runtime.owners, module_id, shortcut_id, &current);
+        let status = runtime
+            .modules
+            .get_mut(module_id)
+            .and_then(|module| module.statuses.get_mut(shortcut_id))
+            .expect("shortcut existence checked above");
+        status.state = ShortcutState::Conflict;
+        Ok(())
+    }
+
     pub fn new(path: PathBuf) -> Self {
         Self {
             path,
@@ -114,17 +149,15 @@ impl ShortcutRegistry {
 
             validate_runtime_accelerator(&accelerator)?;
             let key = accelerator_key(&accelerator);
-            let state = if runtime.owners.contains_key(&key) {
-                ShortcutState::Conflict
-            } else {
-                runtime.owners.insert(
-                    key,
-                    ShortcutOwner {
+            let state = match runtime.owners.entry(key) {
+                std::collections::btree_map::Entry::Vacant(entry) => {
+                    entry.insert(ShortcutOwner {
                         module_id: module_id.to_owned(),
                         shortcut_id: declaration.id.clone(),
-                    },
-                );
-                ShortcutState::Registered
+                    });
+                    ShortcutState::Registered
+                }
+                std::collections::btree_map::Entry::Occupied(_) => ShortcutState::Conflict,
             };
             statuses.insert(
                 declaration.id.clone(),
@@ -140,6 +173,7 @@ impl ShortcutRegistry {
         runtime.modules.insert(
             module_id.to_owned(),
             ActiveModule {
+                #[cfg(test)]
                 session_token: session_token.to_owned(),
                 statuses,
             },
@@ -147,6 +181,7 @@ impl ShortcutRegistry {
         Ok(result)
     }
 
+    #[cfg(test)]
     pub fn route(&self, accelerator: &str) -> Result<ShortcutEvent, String> {
         let runtime = self
             .runtime
@@ -185,12 +220,12 @@ impl ShortcutRegistry {
             .and_then(|module| module.statuses.get(shortcut_id))
             .cloned()
             .ok_or_else(|| format!("shortcut is not declared: {module_id}::{shortcut_id}"))?;
-        if let Some(owner) = runtime.owners.get(&desired_key) {
-            if owner.module_id != module_id || owner.shortcut_id != shortcut_id {
-                return Err(format!(
-                    "shortcut accelerator is already in use: {accelerator}"
-                ));
-            }
+        if let Some(owner) = runtime.owners.get(&desired_key)
+            && (owner.module_id != module_id || owner.shortcut_id != shortcut_id)
+        {
+            return Err(format!(
+                "shortcut accelerator is already in use: {accelerator}"
+            ));
         }
 
         let mut preferences = self.load_preferences()?;

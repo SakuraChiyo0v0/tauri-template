@@ -18,9 +18,16 @@ export interface ModuleManagementState {
   canToggle: boolean;
   canRollback: boolean;
   canUninstall: boolean;
+  permissionSummary: string[];
+  permissionVersion: string | null;
+  canApprovePermissions: boolean;
+  canRevokePermissions: boolean;
 }
 
 export function formatRuntimeDiagnostic(diagnostic: RuntimeModuleDiagnostic) {
+  if (diagnostic.code === "waiting_permission") {
+    return "等待批准原生能力";
+  }
   if (diagnostic.code === "missing_dependency") {
     return `缺少 ${diagnostic.dependencyId ?? "未知模块"}（需要 ${diagnostic.requiredVersion ?? "兼容版本"}）`;
   }
@@ -53,7 +60,9 @@ export function getModuleManagementState(feature: RegisteredFeature, enabled: bo
   return {
     sourceLabel: isRuntime ? "运行时" : "内置",
     status,
-    statusLabel: labels[status],
+    statusLabel: runtime?.permissionStatus === "awaiting_approval"
+      ? status === "active" ? "运行中 · 更新待授权" : "等待权限"
+      : labels[status],
     version: runtime?.selectedVersion ?? runtime?.manifest.version ?? feature.version,
     error: runtime?.lastError?.message ?? null,
     diagnosticMessages: runtime?.diagnostics.map(formatRuntimeDiagnostic) ?? [],
@@ -65,5 +74,9 @@ export function getModuleManagementState(feature: RegisteredFeature, enabled: bo
     canToggle: feature.canDisable !== false,
     canRollback: isRuntime && runtime.previousSelectedVersion !== null && runtime.status === "active",
     canUninstall: isRuntime,
+    permissionSummary: runtime?.nativePermissionSummary ?? [],
+    permissionVersion: runtime?.permissionVersion ?? null,
+    canApprovePermissions: runtime?.permissionStatus === "awaiting_approval",
+    canRevokePermissions: runtime?.permissionStatus === "approved",
   };
 }

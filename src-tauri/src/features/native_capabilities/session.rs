@@ -5,6 +5,7 @@ use super::permissions::{NativeCapabilityKind, NormalizedNativeCapabilities};
 #[derive(Debug, Clone)]
 pub struct NativeSession {
     pub module_id: String,
+    #[allow(dead_code)]
     pub version: String,
     pub permissions: NormalizedNativeCapabilities,
 }
@@ -15,6 +16,15 @@ pub struct SessionManager {
 }
 
 impl SessionManager {
+    pub fn get(&self, token: &str) -> Result<NativeSession, String> {
+        self.sessions
+            .lock()
+            .map_err(|_| "native session lock poisoned")?
+            .get(token)
+            .cloned()
+            .ok_or_else(|| "invalid_session".into())
+    }
+
     pub fn issue(
         &self,
         module_id: &str,
@@ -61,16 +71,23 @@ impl SessionManager {
         Ok(session.clone())
     }
 
-    pub fn revoke_module(&self, module_id: &str) {
-        if let Ok(mut sessions) = self.sessions.lock() {
-            sessions.retain(|_, session| session.module_id != module_id);
-        }
-    }
-
-    pub fn revoke_token(&self, token: &str) {
-        if let Ok(mut sessions) = self.sessions.lock() {
+    pub fn revoke_module(&self, module_id: &str) -> Vec<String> {
+        let Ok(mut sessions) = self.sessions.lock() else {
+            return Vec::new();
+        };
+        let tokens = sessions
+            .iter()
+            .filter(|(_, session)| session.module_id == module_id)
+            .map(|(token, _)| token.clone())
+            .collect::<Vec<_>>();
+        for token in &tokens {
             sessions.remove(token);
         }
+        tokens
+    }
+
+    pub fn revoke_token(&self, token: &str) -> Option<NativeSession> {
+        self.sessions.lock().ok()?.remove(token)
     }
 }
 

@@ -19,6 +19,7 @@ pub enum RuntimeModuleDiagnosticCode {
     DependencyCycle,
     UpstreamActivationFailed,
     ResolutionLimit,
+    WaitingPermission,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]

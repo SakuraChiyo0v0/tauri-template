@@ -2,7 +2,18 @@ import type { SelectSetting, SwitchSetting } from "@/core/settings/setting-types
 import type { NavigationGroup } from "@/core/features/feature-types";
 
 export const RUNTIME_MODULE_SCHEMA_VERSION = 1;
-export const RUNTIME_MODULE_SDK_VERSION = 2;
+export const RUNTIME_MODULE_SDK_VERSION = 3;
+
+export type RuntimeExternalFileAccess = "read" | "write" | "list";
+export type RuntimeRegistryAccess = "read" | "read-write";
+
+export interface RuntimeNativeCapabilities {
+  filesystem: { private: boolean; external: RuntimeExternalFileAccess[] } | null;
+  process: { urlSchemes: string[]; executableGrants: boolean } | null;
+  registry: Array<{ hive: "HKCU" | "HKLM"; key: string; access: RuntimeRegistryAccess }>;
+  tray: Array<{ id: string; label: string; kind: "button" | "check" | "separator"; order: number }>;
+  shortcuts: Array<{ id: string; description: string; accelerator: string }>;
+}
 
 export interface RuntimeNavigationManifest {
   id: string;
@@ -32,11 +43,12 @@ export interface RuntimeModuleManifest {
   description: string;
   version: string;
   hostVersion: string;
-  sdkVersion: 1 | 2;
+  sdkVersion: 1 | 2 | 3;
   entry: string;
   dependencies: RuntimeModuleDependencies;
   navigation: RuntimeNavigationManifest[];
   settings: RuntimeSettingManifest[];
+  nativeCapabilities?: RuntimeNativeCapabilities;
 }
 
 const moduleIdPattern = /^[a-z][a-z0-9]*(?:-[a-z0-9]+)+$/;
@@ -59,6 +71,81 @@ function string(value: unknown, label: string, maxLength = 200) {
 
 function optionalString(value: unknown, label: string) {
   return value === undefined ? undefined : string(value, label);
+}
+
+function parseNativeCapabilities(value: unknown): RuntimeNativeCapabilities {
+  const capabilities = object(value, "nativeCapabilities");
+  const allowedKeys = new Set(["filesystem", "process", "registry", "tray", "shortcuts"]);
+  const unknownKey = Object.keys(capabilities).find((key) => !allowedKeys.has(key));
+  if (unknownKey) throw new Error(`Unknown native capability: ${unknownKey}`);
+
+  const filesystem = capabilities.filesystem == null ? null : (() => {
+    const item = object(capabilities.filesystem, "nativeCapabilities.filesystem");
+    const external = item.external ?? [];
+    if (typeof item.private !== "boolean" || !Array.isArray(external)
+      || external.some((access) => !["read", "write", "list"].includes(String(access)))) {
+      throw new Error("Invalid native filesystem capabilities.");
+    }
+    return { private: item.private, external: [...new Set(external)] as RuntimeExternalFileAccess[] };
+  })();
+
+  const process = capabilities.process == null ? null : (() => {
+    const item = object(capabilities.process, "nativeCapabilities.process");
+    const urlSchemes = item.urlSchemes ?? [];
+    if (!Array.isArray(urlSchemes) || typeof item.executableGrants !== "boolean") {
+      throw new Error("Invalid native process capabilities.");
+    }
+    const schemes = urlSchemes.map((value, index) => string(value, `nativeCapabilities.process.urlSchemes[${index}]`, 32).toLowerCase());
+    if (schemes.some((scheme) => !/^[a-z][a-z0-9+.-]*$/.test(scheme)
+      || ["file", "javascript", "data", "shell", "powershell", "cmd"].includes(scheme))) {
+      throw new Error("Invalid or unsafe URL scheme.");
+    }
+    return { urlSchemes: [...new Set(schemes)].sort(), executableGrants: item.executableGrants };
+  })();
+
+  const parseArray = (input: unknown, label: string) => {
+    if (input === undefined) return [];
+    if (!Array.isArray(input)) throw new Error(`${label} must be an array.`);
+    return input;
+  };
+  const registry = parseArray(capabilities.registry, "nativeCapabilities.registry").map((value, index) => {
+    const item = object(value, `nativeCapabilities.registry[${index}]`);
+    if ((item.hive !== "HKCU" && item.hive !== "HKLM")
+      || (item.access !== "read" && item.access !== "read-write")
+      || (item.hive === "HKLM" && item.access === "read-write")) {
+      throw new Error("Invalid native registry capability.");
+    }
+    const hive = item.hive as "HKCU" | "HKLM";
+    const access = item.access as RuntimeRegistryAccess;
+    const key = string(item.key, `nativeCapabilities.registry[${index}].key`, 512).replace(/\//g, "\\");
+    if (key.split("\\").some((part) => !part || part === "." || part === "..")) {
+      throw new Error("Invalid native registry key.");
+    }
+    return { hive, key, access };
+  });
+  const tray = parseArray(capabilities.tray, "nativeCapabilities.tray").map((value, index) => {
+    const item = object(value, `nativeCapabilities.tray[${index}]`);
+    const kind = item.kind as "button" | "check" | "separator";
+    if (kind !== "button" && kind !== "check" && kind !== "separator") throw new Error("Invalid tray item kind.");
+    if (typeof item.order !== "number" || !Number.isInteger(item.order)) throw new Error("Invalid tray item order.");
+    return {
+      id: string(item.id, `nativeCapabilities.tray[${index}].id`, 64),
+      label: kind === "separator" ? String(item.label ?? "") : string(item.label, `nativeCapabilities.tray[${index}].label`, 120),
+      kind,
+      order: item.order,
+    };
+  });
+  const shortcuts = parseArray(capabilities.shortcuts, "nativeCapabilities.shortcuts").map((value, index) => {
+    const item = object(value, `nativeCapabilities.shortcuts[${index}]`);
+    const accelerator = string(item.accelerator, `nativeCapabilities.shortcuts[${index}].accelerator`, 64);
+    if (!accelerator.includes("+")) throw new Error("Invalid shortcut accelerator.");
+    return {
+      id: string(item.id, `nativeCapabilities.shortcuts[${index}].id`, 64),
+      description: string(item.description, `nativeCapabilities.shortcuts[${index}].description`),
+      accelerator,
+    };
+  });
+  return { filesystem, process, registry, tray, shortcuts };
 }
 
 function parseDependencies(value: unknown, moduleId: string): RuntimeModuleDependencies {
@@ -173,10 +260,16 @@ export function parseRuntimeModuleManifest(value: unknown): RuntimeModuleManifes
   const version = string(manifest.version, "module version", 64);
   if (!semverPattern.test(version)) throw new Error(`Invalid module version: ${version}`);
   if (manifest.schemaVersion !== RUNTIME_MODULE_SCHEMA_VERSION) throw new Error("Unsupported module schema version.");
-  if (manifest.sdkVersion !== 1 && manifest.sdkVersion !== RUNTIME_MODULE_SDK_VERSION) {
+  if (manifest.sdkVersion !== 1 && manifest.sdkVersion !== 2 && manifest.sdkVersion !== RUNTIME_MODULE_SDK_VERSION) {
     throw new Error("Unsupported module SDK version.");
   }
   const sdkVersion = manifest.sdkVersion;
+  if (sdkVersion < 3 && manifest.nativeCapabilities !== undefined) {
+    throw new Error("Native capabilities require Host SDK V3.");
+  }
+  const nativeCapabilities = sdkVersion === 3
+    ? parseNativeCapabilities(manifest.nativeCapabilities ?? {})
+    : undefined;
 
   const entry = string(manifest.entry, "module entry", 100);
   if (entry !== "index.js") throw new Error("Runtime module entry must be index.js.");
@@ -193,5 +286,6 @@ export function parseRuntimeModuleManifest(value: unknown): RuntimeModuleManifes
     dependencies: parseDependencies(manifest.dependencies, id),
     navigation: parseNavigation(manifest.navigation ?? [], id),
     settings: parseSettings(manifest.settings ?? []),
+    nativeCapabilities,
   };
 }

@@ -5,12 +5,13 @@ use std::{
     process::{Command, Stdio},
     sync::{
         Arc, Mutex,
-        atomic::{AtomicBool, Ordering},
+        atomic::{AtomicBool, AtomicUsize, Ordering},
     },
     thread,
     time::{Duration, Instant},
 };
 
+use serde::Serialize;
 use url::Url;
 
 use super::filesystem::FilesystemManager;
@@ -20,7 +21,8 @@ const MAX_ARGUMENT_BYTES: usize = 4_096;
 const MAX_PROCESS_OUTPUT_BYTES: usize = 1024 * 1024;
 const MAX_PROCESS_DURATION: Duration = Duration::from_secs(30);
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
 pub struct ProcessResult {
     pub code: Option<i32>,
     pub stdout: String,
@@ -64,6 +66,45 @@ pub fn open_approved_url(
     opener.open_url(&url)
 }
 
+pub trait PathOpener {
+    fn open_path(&self, path: &Path) -> Result<(), String>;
+    fn reveal_in_folder(&self, path: &Path) -> Result<(), String>;
+}
+
+pub struct SystemPathOpener;
+
+impl PathOpener for SystemPathOpener {
+    fn open_path(&self, path: &Path) -> Result<(), String> {
+        tauri_plugin_opener::open_path(path, None::<&str>)
+            .map_err(|error| format!("open granted file: {error}"))
+    }
+
+    fn reveal_in_folder(&self, path: &Path) -> Result<(), String> {
+        tauri_plugin_opener::reveal_item_in_dir(path)
+            .map_err(|error| format!("reveal granted file: {error}"))
+    }
+}
+
+pub fn open_granted_file(
+    opener: &impl PathOpener,
+    grants: &FilesystemManager,
+    module_id: &str,
+    grant_id: &str,
+) -> Result<(), String> {
+    let path = grants.resolve_readable_file(module_id, grant_id)?;
+    opener.open_path(&path)
+}
+
+pub fn reveal_granted_file(
+    opener: &impl PathOpener,
+    grants: &FilesystemManager,
+    module_id: &str,
+    grant_id: &str,
+) -> Result<(), String> {
+    let path = grants.resolve_readable_file(module_id, grant_id)?;
+    opener.reveal_in_folder(&path)
+}
+
 pub struct ProcessRunner<'a> {
     grants: &'a FilesystemManager,
 }
@@ -73,6 +114,7 @@ impl<'a> ProcessRunner<'a> {
         Self { grants }
     }
 
+    #[cfg(test)]
     pub fn run(
         &self,
         module_id: &str,
@@ -129,8 +171,9 @@ impl<'a> ProcessRunner<'a> {
         let stdout = child.stdout.take().ok_or("process stdout unavailable")?;
         let stderr = child.stderr.take().ok_or("process stderr unavailable")?;
         let exceeded = Arc::new(AtomicBool::new(false));
-        let stdout_thread = read_output(stdout, exceeded.clone());
-        let stderr_thread = read_output(stderr, exceeded.clone());
+        let output_bytes = Arc::new(AtomicUsize::new(0));
+        let stdout_thread = read_output(stdout, exceeded.clone(), output_bytes.clone());
+        let stderr_thread = read_output(stderr, exceeded.clone(), output_bytes);
         let started = Instant::now();
         let (status, timed_out, failure) = loop {
             if exceeded.load(Ordering::Relaxed) {
@@ -185,15 +228,15 @@ impl<'a> ProcessRunner<'a> {
     }
 }
 
-pub struct ProcessSupervisor<'a> {
-    runner: ProcessRunner<'a>,
+pub struct ProcessSupervisor {
+    grants: FilesystemManager,
     active: Mutex<BTreeMap<String, Vec<Arc<AtomicBool>>>>,
 }
 
-impl<'a> ProcessSupervisor<'a> {
-    pub fn new(grants: &'a FilesystemManager) -> Self {
+impl ProcessSupervisor {
+    pub fn new(grants: &FilesystemManager) -> Self {
         Self {
-            runner: ProcessRunner::new(grants),
+            grants: grants.clone(),
             active: Mutex::new(BTreeMap::new()),
         }
     }
@@ -217,30 +260,30 @@ impl<'a> ProcessSupervisor<'a> {
             .or_default()
             .push(cancelled.clone());
 
-        let result = self.runner.run_with_cancellation(
+        let result = ProcessRunner::new(&self.grants).run_with_cancellation(
             module_id,
             grant_id,
             arguments,
             timeout,
             cancelled.clone(),
         );
-        if let Ok(mut active) = self.active.lock() {
-            if let Some(processes) = active.get_mut(session_token) {
-                processes.retain(|process| !Arc::ptr_eq(process, &cancelled));
-                if processes.is_empty() {
-                    active.remove(session_token);
-                }
+        if let Ok(mut active) = self.active.lock()
+            && let Some(processes) = active.get_mut(session_token)
+        {
+            processes.retain(|process| !Arc::ptr_eq(process, &cancelled));
+            if processes.is_empty() {
+                active.remove(session_token);
             }
         }
         result
     }
 
     pub fn cancel_session(&self, session_token: &str) {
-        if let Ok(active) = self.active.lock() {
-            if let Some(processes) = active.get(session_token) {
-                for process in processes {
-                    process.store(true, Ordering::Relaxed);
-                }
+        if let Ok(active) = self.active.lock()
+            && let Some(processes) = active.get(session_token)
+        {
+            for process in processes {
+                process.store(true, Ordering::Relaxed);
             }
         }
     }
@@ -249,6 +292,7 @@ impl<'a> ProcessSupervisor<'a> {
 fn read_output(
     mut stream: impl Read + Send + 'static,
     exceeded: Arc<AtomicBool>,
+    output_bytes: Arc<AtomicUsize>,
 ) -> thread::JoinHandle<(Vec<u8>, bool)> {
     thread::spawn(move || {
         let mut collected = Vec::new();
@@ -258,7 +302,8 @@ fn read_output(
             match stream.read(&mut buffer) {
                 Ok(0) | Err(_) => break,
                 Ok(count) => {
-                    let remaining = MAX_PROCESS_OUTPUT_BYTES.saturating_sub(collected.len());
+                    let previous = output_bytes.fetch_add(count, Ordering::Relaxed);
+                    let remaining = MAX_PROCESS_OUTPUT_BYTES.saturating_sub(previous);
                     collected.extend_from_slice(&buffer[..count.min(remaining)]);
                     if count > remaining {
                         overflow = true;
@@ -288,7 +333,7 @@ fn reject_known_shell(path: &Path) -> Result<(), String> {
 
 #[cfg(test)]
 mod tests {
-    use std::{fs, path::PathBuf, sync::Mutex, time::Duration};
+    use std::{fs, io::Cursor, path::PathBuf, sync::Mutex, time::Duration};
 
     use crate::features::native_capabilities::filesystem::{
         FilesystemManager, GrantAccess, GrantKind,
@@ -323,6 +368,85 @@ mod tests {
             opener.0.lock().unwrap().as_slice(),
             ["https://example.com/"]
         );
+    }
+
+    #[test]
+    fn file_open_and_reveal_use_only_an_owned_readable_grant() {
+        #[derive(Default)]
+        struct RecordingPathOpener(Mutex<Vec<(String, PathBuf)>>);
+
+        impl PathOpener for RecordingPathOpener {
+            fn open_path(&self, path: &Path) -> Result<(), String> {
+                self.0
+                    .lock()
+                    .unwrap()
+                    .push(("open".into(), path.to_owned()));
+                Ok(())
+            }
+
+            fn reveal_in_folder(&self, path: &Path) -> Result<(), String> {
+                self.0
+                    .lock()
+                    .unwrap()
+                    .push(("reveal".into(), path.to_owned()));
+                Ok(())
+            }
+        }
+
+        let temp = tempfile::tempdir().unwrap();
+        let file = temp.path().join("selected.txt");
+        fs::write(&file, b"selected").unwrap();
+        let grants =
+            FilesystemManager::new(temp.path().join("private"), temp.path().join("grants.json"));
+        let grant = grants
+            .create_grant(
+                "alpha-module",
+                &file,
+                GrantKind::File,
+                GrantAccess {
+                    read: true,
+                    write: false,
+                    list: false,
+                    execute: false,
+                },
+            )
+            .unwrap();
+        let opener = RecordingPathOpener::default();
+
+        open_granted_file(&opener, &grants, "alpha-module", &grant.id).unwrap();
+        reveal_granted_file(&opener, &grants, "alpha-module", &grant.id).unwrap();
+        assert!(open_granted_file(&opener, &grants, "beta-module", &grant.id).is_err());
+        grants.revoke_grant("alpha-module", &grant.id).unwrap();
+        assert!(reveal_granted_file(&opener, &grants, "alpha-module", &grant.id).is_err());
+        let canonical_file = file.canonicalize().unwrap();
+        assert_eq!(
+            opener.0.lock().unwrap().as_slice(),
+            [
+                ("open".into(), canonical_file.clone()),
+                ("reveal".into(), canonical_file)
+            ]
+        );
+    }
+
+    #[test]
+    fn stdout_and_stderr_share_one_output_limit() {
+        let exceeded = Arc::new(AtomicBool::new(false));
+        let output_bytes = Arc::new(AtomicUsize::new(0));
+        let first = read_output(
+            Cursor::new(vec![b'a'; 700_000]),
+            exceeded.clone(),
+            output_bytes.clone(),
+        );
+        let second = read_output(
+            Cursor::new(vec![b'b'; 700_000]),
+            exceeded.clone(),
+            output_bytes,
+        );
+        let first = first.join().unwrap().0;
+        let second = second.join().unwrap().0;
+
+        assert_eq!(first.len() + second.len(), MAX_PROCESS_OUTPUT_BYTES);
+        assert!(exceeded.load(Ordering::Relaxed));
     }
 
     #[test]

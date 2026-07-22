@@ -468,6 +468,7 @@ mod tests {
             },
             navigation: Vec::new(),
             settings: Vec::new(),
+            native_capabilities: Default::default(),
         }
     }
 

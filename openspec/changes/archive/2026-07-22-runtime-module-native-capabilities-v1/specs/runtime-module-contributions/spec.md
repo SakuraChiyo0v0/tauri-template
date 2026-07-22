@@ -7,7 +7,7 @@
 - **WHEN** 已安装模块清单声明 `sdkVersion: 1`
 - **THEN** 底座传入字面量版本为 1 且不包含数据库或原生能力成员的 V1 SDK
 
-#### Scenario: V2 模块保持数据库 SDK
+#### Scenario: V2 模块获得数据库能力
 - **WHEN** 已安装模块清单声明 `sdkVersion: 2`
 - **THEN** 底座传入字面量版本为 2 且包含隔离数据库但不包含 V3 原生能力成员的 V2 SDK
 

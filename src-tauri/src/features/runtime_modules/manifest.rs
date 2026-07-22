@@ -3,9 +3,13 @@ use std::collections::HashSet;
 use semver::{Version, VersionReq};
 use serde::{Deserialize, Serialize};
 
+use crate::features::native_capabilities::permissions::{
+    NativeCapabilities, NormalizedNativeCapabilities,
+};
+
 pub const SCHEMA_VERSION: u32 = 1;
 pub const MIN_SDK_VERSION: u32 = 1;
-pub const MAX_SDK_VERSION: u32 = 2;
+pub const MAX_SDK_VERSION: u32 = 3;
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(rename_all = "camelCase")]
@@ -24,6 +28,8 @@ pub struct RuntimeModuleManifest {
     pub navigation: Vec<RuntimeNavigationManifest>,
     #[serde(default)]
     pub settings: Vec<RuntimeSettingManifest>,
+    #[serde(default)]
+    pub native_capabilities: NativeCapabilities,
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq)]
@@ -125,6 +131,10 @@ impl RuntimeModuleManifest {
         if self.entry != "index.js" {
             return Err("runtime module entry must be index.js".into());
         }
+        if self.sdk_version < 3 && self.native_capabilities != NativeCapabilities::default() {
+            return Err("native capabilities require Host SDK V3".into());
+        }
+        self.native_capabilities.normalize()?;
 
         let mut dependency_ids = HashSet::new();
         for dependency in self
@@ -221,6 +231,10 @@ impl RuntimeModuleManifest {
         }
         Ok(())
     }
+
+    pub fn normalized_native_capabilities(&self) -> Result<NormalizedNativeCapabilities, String> {
+        self.native_capabilities.normalize()
+    }
 }
 
 fn validate_text(value: &str, label: &str, max_length: usize) -> Result<(), String> {
@@ -277,6 +291,7 @@ mod tests {
                 order: Some(10),
             }],
             settings: vec![],
+            native_capabilities: NativeCapabilities::default(),
         }
     }
 
@@ -286,16 +301,48 @@ mod tests {
     }
 
     #[test]
-    fn accepts_sdk_v1_and_v2_but_rejects_newer_versions() {
+    fn accepts_sdk_v1_v2_and_v3_but_rejects_newer_versions() {
         let mut value = manifest();
         value.sdk_version = 2;
         assert!(value.validate(&Version::new(0, 1, 0)).is_ok());
         value.sdk_version = 3;
+        assert!(value.validate(&Version::new(0, 1, 0)).is_ok());
+        value.sdk_version = 4;
         assert!(
             value
                 .validate(&Version::new(0, 1, 0))
                 .unwrap_err()
                 .contains("SDK version")
+        );
+    }
+
+    #[test]
+    fn accepts_sdk_v3_with_native_capabilities_and_rejects_them_on_v2() {
+        let mut value = serde_json::to_value(manifest()).unwrap();
+        value["sdkVersion"] = serde_json::json!(3);
+        value["nativeCapabilities"] = serde_json::json!({
+            "filesystem": { "private": true, "external": ["read"] },
+            "process": { "urlSchemes": ["https"], "executableGrants": false },
+            "registry": [],
+            "tray": [],
+            "shortcuts": []
+        });
+        let parsed = RuntimeModuleManifest::parse_and_validate(
+            &serde_json::to_vec(&value).unwrap(),
+            &Version::new(0, 1, 0),
+        )
+        .unwrap();
+        assert_eq!(parsed.sdk_version, 3);
+        assert!(parsed.native_capabilities.filesystem.unwrap().private);
+
+        value["sdkVersion"] = serde_json::json!(2);
+        assert!(
+            RuntimeModuleManifest::parse_and_validate(
+                &serde_json::to_vec(&value).unwrap(),
+                &Version::new(0, 1, 0),
+            )
+            .unwrap_err()
+            .contains("native capabilities")
         );
     }
 

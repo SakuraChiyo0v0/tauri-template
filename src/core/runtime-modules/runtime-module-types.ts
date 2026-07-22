@@ -15,7 +15,10 @@ export type RuntimeModuleDiagnosticCode =
   | "incompatible_dependency"
   | "dependency_cycle"
   | "upstream_activation_failed"
-  | "resolution_limit";
+  | "resolution_limit"
+  | "waiting_permission";
+
+export type RuntimeModulePermissionStatus = "not_required" | "awaiting_approval" | "approved";
 
 export interface RuntimeModuleDiagnostic {
   code: RuntimeModuleDiagnosticCode;
@@ -52,6 +55,10 @@ export interface InstalledRuntimeModule {
   activeSha256: string;
   blockedVersion: string | null;
   lastError: RuntimeModuleError | null;
+  permissionStatus: RuntimeModulePermissionStatus;
+  permissionVersion: string | null;
+  nativePermissionSummary: string[];
+  nativePermissionFingerprint: string | null;
 }
 
 export interface RuntimeModulePlanSnapshot {
@@ -125,6 +132,69 @@ export interface RuntimeModuleDatabase {
   setUserVersion(version: number): Promise<void>;
 }
 
+export interface RuntimeFileGrant {
+  id: string;
+  moduleId: string;
+  displayName: string;
+  kind: "file" | "directory" | "executable";
+  access: { read: boolean; write: boolean; list: boolean; execute: boolean };
+}
+
+export interface RuntimeDirectoryEntry {
+  name: string;
+  kind: "file" | "directory" | "executable";
+}
+
+export interface RuntimeProcessResult {
+  code: number | null;
+  stdout: string;
+  stderr: string;
+  timedOut: boolean;
+}
+
+export type RuntimeRegistryValue =
+  | { type: "string"; value: string }
+  | { type: "dword" | "qword"; value: number }
+  | { type: "binary"; value: number[] }
+  | { type: "multi-string"; value: string[] };
+
+export interface RuntimeTrayItemUpdate {
+  label?: string;
+  enabled?: boolean;
+  checked?: boolean;
+}
+
+export interface RuntimeShortcutStatus {
+  shortcutId: string;
+  accelerator: string | null;
+  state: "registered" | "conflict" | "disabled";
+}
+
+export interface RuntimeModuleNativeBackend {
+  createSession(moduleId: string, version: string): Promise<string>;
+  releaseSession(sessionToken: string): Promise<void>;
+  readPrivateFile(sessionToken: string, path: string): Promise<number[]>;
+  writePrivateFile(sessionToken: string, path: string, data: number[]): Promise<number>;
+  listFileGrants(sessionToken: string): Promise<RuntimeFileGrant[]>;
+  readGrantedFile(sessionToken: string, grantId: string): Promise<number[]>;
+  writeGrantedFile(sessionToken: string, grantId: string, data: number[]): Promise<number>;
+  listGrantedDirectory(sessionToken: string, grantId: string): Promise<RuntimeDirectoryEntry[]>;
+  revokeFileGrant(sessionToken: string, grantId: string): Promise<void>;
+  openUrl(sessionToken: string, url: string): Promise<void>;
+  openPath(sessionToken: string, grantId: string): Promise<void>;
+  revealInFolder(sessionToken: string, grantId: string): Promise<void>;
+  runProcess(sessionToken: string, grantId: string, arguments_: string[], timeoutMs?: number): Promise<RuntimeProcessResult>;
+  readRegistry(sessionToken: string, hive: "HKCU" | "HKLM", key: string, name: string): Promise<RuntimeRegistryValue>;
+  writeRegistry(sessionToken: string, hive: "HKCU", key: string, name: string, value: RuntimeRegistryValue): Promise<void>;
+  deleteRegistryValue(sessionToken: string, hive: "HKCU", key: string, name: string): Promise<void>;
+  updateTrayItem(sessionToken: string, itemId: string, update: RuntimeTrayItemUpdate): Promise<void>;
+  listShortcuts(sessionToken: string): Promise<RuntimeShortcutStatus[]>;
+  rebindShortcut(sessionToken: string, shortcutId: string, accelerator: string): Promise<RuntimeShortcutStatus[]>;
+  disableShortcut(sessionToken: string, shortcutId: string): Promise<RuntimeShortcutStatus[]>;
+  onTrayAction(moduleId: string, listener: (itemId: string) => void): Promise<() => void>;
+  onShortcutTrigger(moduleId: string, listener: (shortcutId: string) => void): Promise<() => void>;
+}
+
 interface RuntimeModuleHostSdkBase {
   readonly hostVersion: string;
   readonly module: {
@@ -152,7 +222,42 @@ export interface RuntimeModuleHostSdkV2 extends RuntimeModuleHostSdkBase {
   readonly database: RuntimeModuleDatabase;
 }
 
-export type RuntimeModuleHostSdk = RuntimeModuleHostSdkV1 | RuntimeModuleHostSdkV2;
+export interface RuntimeModuleHostSdkV3 extends RuntimeModuleHostSdkBase {
+  readonly sdkVersion: 3;
+  readonly database: RuntimeModuleDatabase;
+  readonly filesystem: {
+    readPrivate(path: string): Promise<number[]>;
+    writePrivate(path: string, data: number[]): Promise<number>;
+    listGrants(): Promise<RuntimeFileGrant[]>;
+    readGrant(grantId: string): Promise<number[]>;
+    writeGrant(grantId: string, data: number[]): Promise<number>;
+    listDirectory(grantId: string): Promise<RuntimeDirectoryEntry[]>;
+    revokeGrant(grantId: string): Promise<void>;
+  };
+  readonly process: {
+    openUrl(url: string): Promise<void>;
+    openPath(grantId: string): Promise<void>;
+    revealInFolder(grantId: string): Promise<void>;
+    run(grantId: string, arguments_?: string[], timeoutMs?: number): Promise<RuntimeProcessResult>;
+  };
+  readonly registry: {
+    read(hive: "HKCU" | "HKLM", key: string, name: string): Promise<RuntimeRegistryValue>;
+    write(key: string, name: string, value: RuntimeRegistryValue): Promise<void>;
+    deleteValue(key: string, name: string): Promise<void>;
+  };
+  readonly tray: {
+    update(itemId: string, update: RuntimeTrayItemUpdate): Promise<void>;
+    onAction(listener: (itemId: string) => void): Promise<() => void>;
+  };
+  readonly shortcuts: {
+    list(): Promise<RuntimeShortcutStatus[]>;
+    rebind(shortcutId: string, accelerator: string): Promise<RuntimeShortcutStatus[]>;
+    disable(shortcutId: string): Promise<RuntimeShortcutStatus[]>;
+    onTrigger(listener: (shortcutId: string) => void): Promise<() => void>;
+  };
+}
+
+export type RuntimeModuleHostSdk = RuntimeModuleHostSdkV1 | RuntimeModuleHostSdkV2 | RuntimeModuleHostSdkV3;
 
 export interface ModuleDataInventoryItem {
   moduleId: string;

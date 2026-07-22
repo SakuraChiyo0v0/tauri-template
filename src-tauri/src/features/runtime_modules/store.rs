@@ -17,6 +17,7 @@ use super::plan::ActivationPlanStore;
 use super::resolver::{ResolveRequest, resolve};
 use super::types::{RuntimeModuleActivationPlan, RuntimeModuleDiagnostic, RuntimeModuleStatus};
 use super::types::{RuntimeModuleCommandError, RuntimeModuleImpact, RuntimeModuleImpactCode};
+use crate::features::native_capabilities::permissions::{PermissionDecision, PermissionStore};
 
 const MAX_PACKAGE_BYTES: u64 = 20 * 1024 * 1024;
 const MAX_EXPANDED_BYTES: u64 = 50 * 1024 * 1024;
@@ -72,6 +73,18 @@ pub struct InstalledRuntimeModule {
     pub active_sha256: String,
     pub blocked_version: Option<String>,
     pub last_error: Option<RuntimeModuleError>,
+    pub permission_status: PermissionStatus,
+    pub permission_version: Option<String>,
+    pub native_permission_summary: Vec<String>,
+    pub native_permission_fingerprint: Option<String>,
+}
+
+#[derive(Debug, Clone, Copy, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum PermissionStatus {
+    NotRequired,
+    AwaitingApproval,
+    Approved,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -182,6 +195,21 @@ impl ModuleStore {
                 .clone()
                 .unwrap_or_else(|| manifest.version.clone());
             let display_sha256 = selected_sha256.clone().unwrap_or_default();
+            let pending_permission = catalog.get(id).and_then(|manifests| {
+                manifests.iter().find(|candidate| {
+                    candidate.sdk_version == 3
+                        && self.permission_status(candidate)
+                            == Ok(PermissionStatus::AwaitingApproval)
+                })
+            });
+            let permission_manifest = pending_permission.unwrap_or(&manifest);
+            let permission_status = self.permission_status(permission_manifest)?;
+            let normalized_permissions = permission_manifest.normalized_native_capabilities()?;
+            let permission_version =
+                (permission_manifest.sdk_version == 3).then(|| permission_manifest.version.clone());
+            let native_permission_summary = normalized_permissions.summary();
+            let native_permission_fingerprint = (permission_manifest.sdk_version == 3)
+                .then(|| normalized_permissions.fingerprint());
             modules.push(InstalledRuntimeModule {
                 required_dependencies: manifest.dependencies.required.clone(),
                 optional_dependencies: manifest.dependencies.optional.clone(),
@@ -199,10 +227,90 @@ impl ModuleStore {
                 active_sha256: display_sha256,
                 blocked_version: state.blocked_version.clone(),
                 last_error: state.last_error.clone(),
+                permission_status,
+                permission_version,
+                native_permission_summary,
+                native_permission_fingerprint,
             });
         }
         modules.sort_by(|left, right| left.manifest.name.cmp(&right.manifest.name));
         Ok(RuntimeModulePlanSnapshot { plan, modules })
+    }
+
+    fn permission_store(&self) -> PermissionStore {
+        PermissionStore::new(
+            self.root
+                .parent()
+                .unwrap_or(&self.root)
+                .join("native-permissions.json"),
+        )
+    }
+
+    fn permission_status(
+        &self,
+        manifest: &RuntimeModuleManifest,
+    ) -> Result<PermissionStatus, String> {
+        if manifest.sdk_version < 3 {
+            return Ok(PermissionStatus::NotRequired);
+        }
+        let requested = manifest.normalized_native_capabilities()?;
+        Ok(
+            match self.permission_store().decision(&manifest.id, &requested)? {
+                PermissionDecision::Approved => PermissionStatus::Approved,
+                PermissionDecision::AwaitingApproval => PermissionStatus::AwaitingApproval,
+            },
+        )
+    }
+
+    fn eligible_catalog(&self, catalog: &ModuleCatalog) -> Result<ModuleCatalog, String> {
+        catalog
+            .iter()
+            .map(|(id, manifests)| {
+                let eligible = manifests
+                    .iter()
+                    .filter_map(|manifest| match self.permission_status(manifest) {
+                        Ok(PermissionStatus::NotRequired | PermissionStatus::Approved) => {
+                            Some(Ok(manifest.clone()))
+                        }
+                        Ok(PermissionStatus::AwaitingApproval) => None,
+                        Err(error) => Some(Err(error)),
+                    })
+                    .collect::<Result<Vec<_>, _>>()?;
+                Ok((id.clone(), eligible))
+            })
+            .collect()
+    }
+
+    fn add_permission_diagnostics(
+        &self,
+        catalog: &ModuleCatalog,
+        desired_enabled: &BTreeMap<String, bool>,
+        resolved: &mut super::resolver::ResolveResult,
+    ) -> Result<(), String> {
+        for (id, enabled) in desired_enabled {
+            if !enabled {
+                continue;
+            }
+            let awaiting = catalog.get(id).is_some_and(|manifests| {
+                manifests.iter().any(|manifest| {
+                    self.permission_status(manifest) == Ok(PermissionStatus::AwaitingApproval)
+                })
+            });
+            if awaiting && !resolved.selected_versions.contains_key(id) {
+                resolved.diagnostics.insert(
+                    id.clone(),
+                    vec![RuntimeModuleDiagnostic {
+                        code: super::types::RuntimeModuleDiagnosticCode::WaitingPermission,
+                        module_id: id.clone(),
+                        dependency_id: None,
+                        required_version: None,
+                        available_versions: Vec::new(),
+                        related_modules: Vec::new(),
+                    }],
+                );
+            }
+        }
+        Ok(())
     }
 
     fn catalog_and_states(&self) -> Result<(ModuleCatalog, ModuleStates), String> {
@@ -273,13 +381,15 @@ impl ModuleStore {
             .filter(|(id, _)| desired_enabled.get(*id).copied().unwrap_or(false))
             .map(|(id, state)| (id.clone(), state.active_version.clone()))
             .collect();
-        let resolved = resolve(&ResolveRequest {
-            catalog: catalog.clone(),
+        let eligible_catalog = self.eligible_catalog(catalog)?;
+        let mut resolved = resolve(&ResolveRequest {
+            catalog: eligible_catalog,
             desired_enabled: desired_set,
             current_selected,
             preferred: None,
             max_search_nodes: MAX_RESOLUTION_NODES,
         });
+        self.add_permission_diagnostics(catalog, &desired_enabled, &mut resolved)?;
         plan_store.commit(desired_enabled, resolved)
     }
 
@@ -290,18 +400,20 @@ impl ModuleStore {
         current: &RuntimeModuleActivationPlan,
     ) -> Result<(RuntimeModuleActivationPlan, bool), String> {
         let (catalog, _) = self.catalog_and_states()?;
+        let eligible_catalog = self.eligible_catalog(&catalog)?;
         let desired_set = desired_enabled
             .iter()
             .filter(|(_, enabled)| **enabled)
             .map(|(id, _)| id.clone())
             .collect();
-        let resolved = resolve(&ResolveRequest {
-            catalog,
+        let mut resolved = resolve(&ResolveRequest {
+            catalog: eligible_catalog,
             desired_enabled: desired_set,
             current_selected: current.selected_versions.clone(),
             preferred,
             max_search_nodes: MAX_RESOLUTION_NODES,
         });
+        self.add_permission_diagnostics(&catalog, &desired_enabled, &mut resolved)?;
         let changed = current.desired_enabled != desired_enabled
             || current.selected_versions != resolved.selected_versions
             || current.activation_order != resolved.activation_order
@@ -419,6 +531,59 @@ impl ModuleStore {
         })
     }
 
+    pub fn approve_native_permissions(
+        &self,
+        module_id: &str,
+        version: &str,
+    ) -> Result<RuntimeModuleOperationResult, String> {
+        validate_module_id(module_id)?;
+        let snapshot = self.snapshot(&[])?;
+        let (catalog, _) = self.catalog_and_states()?;
+        let manifest = catalog
+            .get(module_id)
+            .and_then(|manifests| {
+                manifests
+                    .iter()
+                    .find(|manifest| manifest.version == version)
+            })
+            .ok_or_else(|| format!("module version is not installed: {module_id} {version}"))?;
+        if manifest.sdk_version != 3 {
+            return Err(format!(
+                "module does not require native permission approval: {module_id}"
+            ));
+        }
+        self.permission_store()
+            .approve(module_id, &manifest.normalized_native_capabilities()?)?;
+        let preferred = snapshot
+            .plan
+            .desired_enabled
+            .get(module_id)
+            .copied()
+            .unwrap_or(false)
+            .then(|| (module_id.to_owned(), version.to_owned()));
+        self.operation_from_resolution(
+            module_id,
+            snapshot.plan.desired_enabled.clone(),
+            preferred,
+            &snapshot.plan,
+        )
+    }
+
+    pub fn revoke_native_permissions(
+        &self,
+        module_id: &str,
+    ) -> Result<RuntimeModuleOperationResult, String> {
+        validate_module_id(module_id)?;
+        let snapshot = self.snapshot(&[])?;
+        self.permission_store().revoke(module_id)?;
+        self.operation_from_resolution(
+            module_id,
+            snapshot.plan.desired_enabled.clone(),
+            None,
+            &snapshot.plan,
+        )
+    }
+
     pub fn set_enabled(
         &self,
         module_id: &str,
@@ -498,13 +663,18 @@ impl ModuleStore {
             .filter(|(_, enabled)| **enabled)
             .map(|(id, _)| id.clone())
             .collect();
-        let resolved = resolve(&ResolveRequest {
-            catalog,
+        let eligible_catalog = self
+            .eligible_catalog(&catalog)
+            .map_err(RuntimeModuleCommandError::from)?;
+        let mut resolved = resolve(&ResolveRequest {
+            catalog: eligible_catalog,
             desired_enabled: desired_set,
             current_selected: snapshot.plan.selected_versions.clone(),
             preferred: Some((module_id.into(), requested_version.clone())),
             max_search_nodes: MAX_RESOLUTION_NODES,
         });
+        self.add_permission_diagnostics(&catalog, &desired_enabled, &mut resolved)
+            .map_err(RuntimeModuleCommandError::from)?;
         if resolved.selected_versions.get(module_id) != Some(&requested_version) {
             return Err(format!(
                 "module {module_id} cannot safely roll back to {requested_version}"
@@ -1114,6 +1284,40 @@ mod tests {
         path
     }
 
+    fn v3_package(directory: &Path) -> PathBuf {
+        let path = directory.join("native-v3.mtp");
+        let file = File::create(&path).unwrap();
+        let mut archive = ZipWriter::new(file);
+        let options = SimpleFileOptions::default().compression_method(CompressionMethod::Deflated);
+        archive.start_file("manifest.json", options).unwrap();
+        let manifest = serde_json::json!({
+            "schemaVersion": 1,
+            "id": "native-tools",
+            "name": "Native tools",
+            "description": "V3 permission test module",
+            "version": "1.0.0",
+            "hostVersion": ">=0.1.0, <0.2.0",
+            "sdkVersion": 3,
+            "entry": "index.js",
+            "dependencies": { "required": [], "optional": [] },
+            "navigation": [],
+            "settings": [],
+            "nativeCapabilities": {
+                "filesystem": { "private": true, "external": [] },
+                "registry": [],
+                "tray": [],
+                "shortcuts": []
+            }
+        });
+        archive.write_all(manifest.to_string().as_bytes()).unwrap();
+        archive.start_file("index.js", options).unwrap();
+        archive
+            .write_all(b"export async function activate() { throw new Error('must not run'); }")
+            .unwrap();
+        archive.finish().unwrap();
+        path
+    }
+
     fn store(directory: &Path) -> ModuleStore {
         ModuleStore::new(directory.join("modules"), Version::new(0, 1, 0))
     }
@@ -1138,6 +1342,179 @@ mod tests {
                 .unwrap()
                 .source
                 .contains("activate")
+        );
+    }
+
+    #[test]
+    fn installs_unapproved_v3_module_without_selecting_or_activating_it() {
+        let temp = tempfile::tempdir().unwrap();
+        let store = store(temp.path());
+        let result = store.install_with_plan(&v3_package(temp.path())).unwrap();
+        let module = result
+            .modules
+            .iter()
+            .find(|module| module.manifest.id == "native-tools")
+            .unwrap();
+
+        assert_eq!(module.status, RuntimeModuleStatus::Waiting);
+        assert_eq!(module.permission_status, PermissionStatus::AwaitingApproval);
+        assert_eq!(module.selected_version, None);
+        assert!(!result.plan.selected_versions.contains_key("native-tools"));
+    }
+
+    #[test]
+    fn approval_activates_v3_and_revocation_returns_it_to_waiting() {
+        let temp = tempfile::tempdir().unwrap();
+        let store = store(temp.path());
+        store.install_with_plan(&v3_package(temp.path())).unwrap();
+
+        let approved = store
+            .approve_native_permissions("native-tools", "1.0.0")
+            .unwrap();
+        let module = approved
+            .modules
+            .iter()
+            .find(|module| module.manifest.id == "native-tools")
+            .unwrap();
+        assert_eq!(module.status, RuntimeModuleStatus::Active);
+        assert_eq!(module.permission_status, PermissionStatus::Approved);
+        assert_eq!(module.selected_version.as_deref(), Some("1.0.0"));
+
+        let revoked = store.revoke_native_permissions("native-tools").unwrap();
+        let module = revoked
+            .modules
+            .iter()
+            .find(|module| module.manifest.id == "native-tools")
+            .unwrap();
+        assert_eq!(module.status, RuntimeModuleStatus::Waiting);
+        assert_eq!(module.permission_status, PermissionStatus::AwaitingApproval);
+        assert_eq!(module.selected_version, None);
+    }
+
+    #[test]
+    #[ignore = "manual smoke: set MTP_SMOKE_V3 to a real Host SDK V3 package"]
+    fn runs_real_v3_package_permission_lifecycle_smoke() {
+        let package = std::env::var("MTP_SMOKE_V3").expect("MTP_SMOKE_V3 is required");
+        let temp = tempfile::tempdir().unwrap();
+        let store = ModuleStore::new(temp.path().join("modules"), Version::new(0, 2, 0));
+        let installed = store.install_with_plan(Path::new(&package)).unwrap();
+        let module_id = installed.module_id;
+        let waiting = installed
+            .modules
+            .iter()
+            .find(|module| module.manifest.id == module_id)
+            .unwrap();
+        assert_eq!(waiting.status, RuntimeModuleStatus::Waiting);
+        assert_eq!(
+            waiting.permission_status,
+            PermissionStatus::AwaitingApproval
+        );
+
+        let version = waiting.manifest.version.clone();
+        let approved = store
+            .approve_native_permissions(&module_id, &version)
+            .unwrap();
+        let active = approved
+            .modules
+            .iter()
+            .find(|module| module.manifest.id == module_id)
+            .unwrap();
+        assert_eq!(active.status, RuntimeModuleStatus::Active);
+        assert_eq!(active.permission_status, PermissionStatus::Approved);
+
+        let capabilities = active.manifest.normalized_native_capabilities().unwrap();
+        assert!(
+            capabilities
+                .filesystem
+                .as_ref()
+                .is_some_and(|value| value.private)
+        );
+        assert!(
+            capabilities
+                .process
+                .as_ref()
+                .is_some_and(|value| value.executable_grants)
+        );
+
+        let filesystem = crate::features::native_capabilities::filesystem::FilesystemManager::new(
+            temp.path().join("runtime-module-data"),
+            temp.path().join("native-file-grants.json"),
+        );
+        filesystem
+            .write_private(&module_id, "verification/smoke.txt", b"Host SDK V3")
+            .unwrap();
+        assert_eq!(
+            filesystem
+                .read_private(&module_id, "verification/smoke.txt")
+                .unwrap(),
+            b"Host SDK V3"
+        );
+
+        let external = temp.path().join("external.txt");
+        fs::write(&external, b"opaque grant").unwrap();
+        let file_grant = filesystem
+            .create_grant(
+                &module_id,
+                &external,
+                crate::features::native_capabilities::filesystem::GrantKind::File,
+                crate::features::native_capabilities::filesystem::GrantAccess::read_write(),
+            )
+            .unwrap();
+        assert_eq!(
+            filesystem.read_grant(&module_id, &file_grant.id).unwrap(),
+            b"opaque grant"
+        );
+        filesystem.revoke_grant(&module_id, &file_grant.id).unwrap();
+        assert!(filesystem.read_grant(&module_id, &file_grant.id).is_err());
+
+        #[cfg(windows)]
+        {
+            let executable = Path::new("C:\\Windows\\System32\\whoami.exe");
+            let executable_grant = filesystem
+                .create_grant(
+                    &module_id,
+                    executable,
+                    crate::features::native_capabilities::filesystem::GrantKind::Executable,
+                    crate::features::native_capabilities::filesystem::GrantAccess::execute(),
+                )
+                .unwrap();
+            let runner =
+                crate::features::native_capabilities::process::ProcessRunner::new(&filesystem);
+            let result = runner
+                .run(
+                    &module_id,
+                    &executable_grant.id,
+                    &[],
+                    std::time::Duration::from_secs(5),
+                )
+                .unwrap();
+            assert_eq!(result.code, Some(0));
+            assert!(!result.stdout.trim().is_empty());
+            filesystem
+                .revoke_grant(&module_id, &executable_grant.id)
+                .unwrap();
+            assert!(
+                runner
+                    .run(
+                        &module_id,
+                        &executable_grant.id,
+                        &[],
+                        std::time::Duration::from_secs(5),
+                    )
+                    .is_err()
+            );
+        }
+
+        let revoked = store.revoke_native_permissions(&module_id).unwrap();
+        let waiting = revoked
+            .modules
+            .iter()
+            .find(|module| module.manifest.id == module_id)
+            .unwrap();
+        assert_eq!(waiting.status, RuntimeModuleStatus::Waiting);
+        assert_eq!(
+            waiting.permission_status,
+            PermissionStatus::AwaitingApproval
         );
     }
 

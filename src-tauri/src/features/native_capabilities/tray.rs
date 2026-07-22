@@ -4,7 +4,8 @@ use serde::{Deserialize, Serialize};
 
 use super::permissions::{NativeCapabilities, TrayItemDeclaration, TrayItemKind};
 
-#[derive(Debug, Clone, Default, PartialEq, Eq)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
 pub struct TrayItemUpdate {
     pub label: Option<String>,
     pub enabled: Option<bool>,
