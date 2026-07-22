@@ -1,12 +1,18 @@
 pub mod manifest;
+pub mod plan;
+pub mod resolver;
 pub mod store;
+pub mod types;
 
 use std::path::Path;
 
 use semver::Version;
 use tauri::{AppHandle, Manager};
 
-use store::{ActivationFailureResult, InstalledRuntimeModule, ModuleStore, RuntimeModuleEntry};
+use store::{
+    ModuleStore, RuntimeModuleEntry, RuntimeModuleOperationResult, RuntimeModulePlanSnapshot,
+};
+use types::RuntimeModuleCommandError;
 
 fn module_store(app: &AppHandle) -> Result<ModuleStore, String> {
     let root = app
@@ -20,16 +26,19 @@ fn module_store(app: &AppHandle) -> Result<ModuleStore, String> {
 }
 
 #[tauri::command]
-pub fn list_runtime_modules(app: AppHandle) -> Result<Vec<InstalledRuntimeModule>, String> {
-    module_store(&app)?.list()
+pub fn list_runtime_modules(
+    app: AppHandle,
+    legacy_disabled_module_ids: Option<Vec<String>>,
+) -> Result<RuntimeModulePlanSnapshot, String> {
+    module_store(&app)?.snapshot(legacy_disabled_module_ids.as_deref().unwrap_or_default())
 }
 
 #[tauri::command]
 pub fn install_runtime_module(
     app: AppHandle,
     package_path: String,
-) -> Result<InstalledRuntimeModule, String> {
-    module_store(&app)?.install(Path::new(&package_path))
+) -> Result<RuntimeModuleOperationResult, String> {
+    module_store(&app)?.install_with_plan(Path::new(&package_path))
 }
 
 #[tauri::command]
@@ -44,8 +53,21 @@ pub fn read_runtime_module_entry(
 pub fn rollback_runtime_module(
     app: AppHandle,
     module_id: String,
-) -> Result<InstalledRuntimeModule, String> {
-    module_store(&app)?.rollback(&module_id)
+) -> Result<RuntimeModuleOperationResult, RuntimeModuleCommandError> {
+    module_store(&app)
+        .map_err(RuntimeModuleCommandError::from)?
+        .rollback_with_plan(&module_id)
+}
+
+#[tauri::command]
+pub fn set_runtime_module_enabled(
+    app: AppHandle,
+    module_id: String,
+    enabled: bool,
+) -> Result<RuntimeModuleOperationResult, RuntimeModuleCommandError> {
+    module_store(&app)
+        .map_err(RuntimeModuleCommandError::from)?
+        .set_enabled(&module_id, enabled)
 }
 
 #[tauri::command]
@@ -54,11 +76,16 @@ pub fn report_runtime_module_activation_failure(
     module_id: String,
     failed_version: String,
     message: String,
-) -> Result<ActivationFailureResult, String> {
-    module_store(&app)?.report_activation_failure(&module_id, &failed_version, &message)
+) -> Result<RuntimeModuleOperationResult, String> {
+    module_store(&app)?.report_activation_failure_with_plan(&module_id, &failed_version, &message)
 }
 
 #[tauri::command]
-pub fn uninstall_runtime_module(app: AppHandle, module_id: String) -> Result<(), String> {
-    module_store(&app)?.uninstall(&module_id)
+pub fn uninstall_runtime_module(
+    app: AppHandle,
+    module_id: String,
+) -> Result<RuntimeModuleOperationResult, RuntimeModuleCommandError> {
+    module_store(&app)
+        .map_err(RuntimeModuleCommandError::from)?
+        .uninstall_with_plan(&module_id)
 }

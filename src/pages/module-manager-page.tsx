@@ -9,8 +9,19 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/com
 import { Switch } from "@/components/ui/switch";
 import { runtimeModuleApi } from "@/core/runtime-modules/runtime-module-api";
 import { getModuleManagementState } from "@/core/runtime-modules/runtime-module-management";
+import type { RuntimeModuleOperationResult } from "@/core/runtime-modules/runtime-module-types";
 
 function messageOf(error: unknown) {
+  if (error && typeof error === "object" && "kind" in error) {
+    const value = error as { kind?: string; message?: string; impact?: { code?: string; relatedModules?: string[] } };
+    if (value.kind === "message" && value.message) return value.message;
+    if (value.kind === "dependency_impact" && value.impact) {
+      const modules = value.impact.relatedModules?.join("、") || "其他模块";
+      if (value.impact.code === "required_by_enabled_modules") return `无法停用：${modules} 仍在依赖此模块。`;
+      if (value.impact.code === "required_by_installed_modules") return `无法卸载：${modules} 仍声明了对此模块的必需依赖。`;
+      if (value.impact.code === "rollback_requires_coordinated_change") return `无法单独回滚：还需要同时变更 ${modules}。`;
+    }
+  }
   return error instanceof Error ? error.message : String(error);
 }
 
@@ -20,12 +31,17 @@ export function ModuleManagerPage() {
   const [feedback, setFeedback] = useState<string | null>(null);
   const features = featureRegistry.getManageable();
 
-  const runReloadingAction = async (actionId: string, action: () => Promise<unknown>) => {
+  const runReloadingAction = async (actionId: string, action: () => Promise<RuntimeModuleOperationResult>) => {
     setBusyAction(actionId);
     setFeedback(null);
     try {
-      await action();
-      location.reload();
+      const result = await action();
+      if (result.planChanged) {
+        location.reload();
+        return;
+      }
+      setFeedback(result.packageInstalled ? "模块版本已安装，但当前兼容激活组合没有变化。" : "当前激活计划没有变化。");
+      setBusyAction(null);
     } catch (error) {
       setFeedback(messageOf(error));
       setBusyAction(null);
@@ -91,15 +107,24 @@ export function ModuleManagerPage() {
                   <p className="text-xs text-muted-foreground">
                     {feature.navigation?.length ?? 0} 个页面 · {feature.settings?.length ?? 0} 个设置项 · {feature.id}
                   </p>
+                  {runtime && (
+                    <p className="text-xs text-muted-foreground">
+                      已选择 {runtime.selectedVersion ? `v${runtime.selectedVersion}` : "无"} · 已安装 {state.availableVersions.map((version) => `v${version}`).join("、")}
+                    </p>
+                  )}
                 </div>
                 <Switch
-                  checked={state.status === "active"}
+                  checked={state.toggleChecked}
                   disabled={!state.canToggle || busyAction !== null}
                   onCheckedChange={(checked) => {
                     setFeedback(null);
-                    void featureRegistry.setEnabled(feature, checked).catch((error) => setFeedback(messageOf(error)));
+                    if (runtime) {
+                      void runReloadingAction(`toggle:${feature.id}`, () => runtimeModuleApi.setEnabled(feature.id, checked));
+                    } else {
+                      void featureRegistry.setEnabled(feature, checked).catch((error) => setFeedback(messageOf(error)));
+                    }
                   }}
-                  aria-label={`${enabled ? "停用" : "启用"}${feature.name}模块`}
+                  aria-label={`${state.toggleChecked ? "停用" : "启用"}${feature.name}模块`}
                 />
               </CardHeader>
 
@@ -110,12 +135,26 @@ export function ModuleManagerPage() {
                 </div>
               )}
 
+              {state.diagnosticMessages.length > 0 && (
+                <div className="mx-5 mb-4 space-y-1 rounded-lg border border-border bg-muted/50 p-3 text-xs text-muted-foreground">
+                  {state.diagnosticMessages.map((message) => <p key={message}>{message}</p>)}
+                </div>
+              )}
+
+              {runtime && (state.requiredDependencies.length > 0 || state.optionalDependencies.length > 0 || state.dependents.length > 0) && (
+                <div className="mx-5 mb-4 grid gap-2 rounded-lg border border-border p-3 text-xs sm:grid-cols-3">
+                  <div><span className="text-muted-foreground">必需依赖</span><p className="mt-1 break-words">{state.requiredDependencies.join("、") || "无"}</p></div>
+                  <div><span className="text-muted-foreground">可选依赖</span><p className="mt-1 break-words">{state.optionalDependencies.join("、") || "无"}</p></div>
+                  <div><span className="text-muted-foreground">依赖者</span><p className="mt-1 break-words">{state.dependents.join("、") || "无"}</p></div>
+                </div>
+              )}
+
               <CardContent className="flex flex-wrap items-center justify-between gap-3 border-t border-border pt-4 text-sm">
                 <span className="flex items-center gap-2 text-muted-foreground">
                   <Power className="size-4" />运行状态
                   <Badge
                     variant={state.status === "active" ? "default" : "secondary"}
-                    className={state.status === "failed" ? "bg-destructive text-white" : undefined}
+                    className={state.status === "blocked" ? "bg-destructive text-white" : undefined}
                   >
                     {state.statusLabel}
                   </Badge>
@@ -128,7 +167,7 @@ export function ModuleManagerPage() {
                       size="sm"
                       disabled={!state.canRollback || busyAction !== null}
                       onClick={() => {
-                        if (!confirm(`将 ${feature.name} 回滚到 v${runtime.previousVersion}？`)) return;
+                        if (!confirm(`将 ${feature.name} 回滚到 v${runtime.previousSelectedVersion}？`)) return;
                         void runReloadingAction(`rollback:${feature.id}`, () => runtimeModuleApi.rollback(feature.id));
                       }}
                     >

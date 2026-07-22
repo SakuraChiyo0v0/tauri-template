@@ -12,7 +12,7 @@ export function createRuntimeModuleHostSdk(module: InstalledRuntimeModule): Runt
     hostVersion: packageMetadata.version,
     module: {
       id: moduleId,
-      version: module.activeVersion,
+      version: module.selectedVersion ?? module.manifest.version,
     },
     logger: createModuleLogger(moduleId),
     settings: {

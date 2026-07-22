@@ -40,6 +40,47 @@ describe("runtime module manifest", () => {
     });
   });
 
+  it("treats a legacy manifest without dependencies as dependency-free", () => {
+    expect(parseRuntimeModuleManifest(validManifest)).toMatchObject({
+      dependencies: { required: [], optional: [] },
+    });
+  });
+
+  it("preserves required and optional dependency ranges", () => {
+    expect(parseRuntimeModuleManifest({
+      ...validManifest,
+      dependencies: {
+        required: [{ id: "data-provider", version: "^1.2.0" }],
+        optional: [{ id: "export-tools", version: ">=1.0.0, <2.0.0" }],
+      },
+    })).toMatchObject({
+      dependencies: {
+        required: [{ id: "data-provider", version: "^1.2.0" }],
+        optional: [{ id: "export-tools", version: ">=1.0.0, <2.0.0" }],
+      },
+    });
+  });
+
+  it.each([
+    {
+      name: "self dependency",
+      dependencies: { required: [{ id: "hello-module", version: "^1.0.0" }] },
+    },
+    {
+      name: "duplicate across dependency kinds",
+      dependencies: {
+        required: [{ id: "data-provider", version: "^1.0.0" }],
+        optional: [{ id: "data-provider", version: "^1.0.0" }],
+      },
+    },
+    {
+      name: "invalid version range",
+      dependencies: { required: [{ id: "data-provider", version: "not a range!" }] },
+    },
+  ])("rejects $name", ({ dependencies }) => {
+    expect(() => parseRuntimeModuleManifest({ ...validManifest, dependencies })).toThrow(/depend/i);
+  });
+
   it.each(["Hello Module", "../escape", "system", "a"])('rejects invalid or reserved module id "%s"', (id) => {
     expect(() => parseRuntimeModuleManifest({ ...validManifest, id })).toThrow(/module id/i);
   });

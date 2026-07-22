@@ -1,7 +1,7 @@
 {
   "name": "modular-tauri-template",
   "private": true,
-  "version": "0.1.0",
+  "version": "0.2.0",
   "type": "module",
   "scripts": {
     "dev": "vite",
@@ -12,6 +12,8 @@
     "build": "tsc --noEmit && vite build",
     "preview": "vite preview",
     "module:pack": "node scripts/package-runtime-module.mjs",
+    "version:check": "node scripts/version.mjs check",
+    "version:bump": "node scripts/version.mjs bump",
     "tauri": "tauri"
   },
   "dependencies": {

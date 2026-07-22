@@ -15,6 +15,16 @@ export interface RuntimeNavigationManifest {
 
 export type RuntimeSettingManifest = SwitchSetting | SelectSetting;
 
+export interface RuntimeModuleDependency {
+  id: string;
+  version: string;
+}
+
+export interface RuntimeModuleDependencies {
+  required: RuntimeModuleDependency[];
+  optional: RuntimeModuleDependency[];
+}
+
 export interface RuntimeModuleManifest {
   schemaVersion: 1;
   id: string;
@@ -24,6 +34,7 @@ export interface RuntimeModuleManifest {
   hostVersion: string;
   sdkVersion: 1;
   entry: string;
+  dependencies: RuntimeModuleDependencies;
   navigation: RuntimeNavigationManifest[];
   settings: RuntimeSettingManifest[];
 }
@@ -32,6 +43,7 @@ const moduleIdPattern = /^[a-z][a-z0-9]*(?:-[a-z0-9]+)+$/;
 const contributionIdPattern = /^[A-Za-z][A-Za-z0-9._-]{1,63}$/;
 const semverPattern = /^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)(?:-[0-9A-Za-z.-]+)?(?:\+[0-9A-Za-z.-]+)?$/;
 const reservedModuleIds = new Set(["system", "logging"]);
+const versionRangePattern = /^[0-9A-Za-z.*<>=~^|,\s-]+$/;
 
 function object(value: unknown, label: string): Record<string, unknown> {
   if (!value || typeof value !== "object" || Array.isArray(value)) throw new Error(`${label} must be an object.`);
@@ -47,6 +59,35 @@ function string(value: unknown, label: string, maxLength = 200) {
 
 function optionalString(value: unknown, label: string) {
   return value === undefined ? undefined : string(value, label);
+}
+
+function parseDependencies(value: unknown, moduleId: string): RuntimeModuleDependencies {
+  if (value === undefined) return { required: [], optional: [] };
+  const dependencies = object(value, "dependencies");
+  const seen = new Set<string>();
+
+  const parseList = (input: unknown, kind: "required" | "optional") => {
+    if (input === undefined) return [];
+    if (!Array.isArray(input)) throw new Error(`dependencies.${kind} must be an array.`);
+    return input.map((item, index) => {
+      const dependency = object(item, `dependencies.${kind}[${index}]`);
+      const id = string(dependency.id, `dependencies.${kind}[${index}].id`, 64);
+      if (!moduleIdPattern.test(id) || reservedModuleIds.has(id) || id === moduleId || seen.has(id)) {
+        throw new Error(`Invalid, self, or duplicate dependency id: ${id}`);
+      }
+      seen.add(id);
+      const version = string(dependency.version, `dependencies.${kind}[${index}].version`, 100);
+      if (!versionRangePattern.test(version) || !/\d/.test(version)) {
+        throw new Error(`Invalid dependency version range for ${id}: ${version}`);
+      }
+      return { id, version };
+    });
+  };
+
+  return {
+    required: parseList(dependencies.required, "required"),
+    optional: parseList(dependencies.optional, "optional"),
+  };
 }
 
 function parseNavigation(value: unknown, moduleId: string): RuntimeNavigationManifest[] {
@@ -146,6 +187,7 @@ export function parseRuntimeModuleManifest(value: unknown): RuntimeModuleManifes
     hostVersion: string(manifest.hostVersion, "host version range", 100),
     sdkVersion: RUNTIME_MODULE_SDK_VERSION,
     entry,
+    dependencies: parseDependencies(manifest.dependencies, id),
     navigation: parseNavigation(manifest.navigation ?? [], id),
     settings: parseSettings(manifest.settings ?? []),
   };

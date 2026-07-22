@@ -1,5 +1,6 @@
 import { Puzzle } from "lucide-react";
 import type { FeatureRegistry } from "@/core/features/feature-registry";
+import { clearLegacyFeatureState, getLegacyDisabledFeatureIds } from "@/core/features/feature-state";
 import { defineFeature, type FeatureModule } from "@/core/features/feature-types";
 import { parseRuntimeModuleManifest } from "./runtime-manifest";
 import { runtimeModuleApi, type RuntimeModuleApi } from "./runtime-module-api";
@@ -26,6 +27,8 @@ export interface RuntimeModuleLoaderDependencies {
   elementRegistry: Pick<CustomElementRegistry, "get">;
   reload(): void;
   recoveryState: RuntimeRecoveryState;
+  getLegacyDisabledModuleIds(): string[];
+  clearLegacyModuleState(moduleIds: readonly string[]): void;
 }
 
 const RECOVERY_KEY_PREFIX = "modular-tauri.runtime-recovery.v1.";
@@ -57,6 +60,8 @@ export function createDefaultRuntimeModuleLoaderDependencies(): RuntimeModuleLoa
     elementRegistry: customElements,
     reload: () => location.reload(),
     recoveryState: browserRecoveryState(),
+    getLegacyDisabledModuleIds: getLegacyDisabledFeatureIds,
+    clearLegacyModuleState: clearLegacyFeatureState,
   };
 }
 
@@ -70,8 +75,9 @@ export async function activateRuntimeModule(
 ): Promise<RuntimeModuleExports> {
   const entry = await dependencies.backend.readEntry(module.manifest.id);
   const manifest = parseRuntimeModuleManifest(entry.manifest);
-  if (manifest.id !== module.manifest.id || manifest.version !== module.activeVersion) {
-    throw new Error(`模块入口身份不匹配：期望 ${module.manifest.id}@${module.activeVersion}。`);
+  if (!module.selectedVersion) throw new Error(`模块 ${module.manifest.id} 没有可激活的选择版本。`);
+  if (manifest.id !== module.manifest.id || manifest.version !== module.selectedVersion) {
+    throw new Error(`模块入口身份不匹配：期望 ${module.manifest.id}@${module.selectedVersion}。`);
   }
 
   const exports = await dependencies.importSource(entry.source, manifest.id, manifest.version);
@@ -103,7 +109,7 @@ export function createRuntimeFeature(
     name: manifest.name,
     description: manifest.description,
     version: manifest.version,
-    defaultEnabled: true,
+    defaultEnabled: module.desiredEnabled,
     source: "runtime",
     runtime: module,
     elementNames: manifest.navigation.map((navigation) => navigation.element),
@@ -133,8 +139,8 @@ function createDiagnosticFeature(module: InstalledRuntimeModule): FeatureModule 
     id: module.manifest.id,
     name: module.manifest.name,
     description: module.manifest.description,
-    version: module.activeVersion,
-    defaultEnabled: true,
+    version: module.selectedVersion ?? module.manifest.version,
+    defaultEnabled: module.desiredEnabled,
     source: "runtime",
     runtime: module,
     navigation: [],
@@ -147,50 +153,83 @@ async function reportFailure(
   error: unknown,
   registry: FeatureRegistry,
   dependencies: RuntimeModuleLoaderDependencies,
-) {
+): Promise<boolean> {
   registry.unregister(module.manifest.id);
   const result = await dependencies.backend.reportActivationFailure(
     module.manifest.id,
-    module.activeVersion,
+    module.selectedVersion as string,
     errorMessage(error),
   );
 
-  try {
-    registry.register(createDiagnosticFeature(result.module));
-  } catch (registrationError) {
-    console.error(`无法注册模块 ${module.manifest.id} 的诊断信息。`, registrationError);
+  const updated = result.modules.find((entry) => entry.manifest.id === module.manifest.id);
+  if (updated) {
+    try {
+      registry.register(createDiagnosticFeature(updated));
+    } catch (registrationError) {
+      console.error(`无法注册模块 ${module.manifest.id} 的诊断信息。`, registrationError);
+    }
   }
 
-  if (result.rolledBack && dependencies.recoveryState.get(module.manifest.id) === null) {
-    dependencies.recoveryState.set(module.manifest.id, module.activeVersion);
-    dependencies.reload();
+  if (result.planChanged && dependencies.recoveryState.get(module.manifest.id) === null) {
+    dependencies.recoveryState.set(module.manifest.id, module.selectedVersion as string);
+    return true;
   }
+  return false;
 }
 
 export async function discoverRuntimeModules(
   registry: FeatureRegistry,
   dependencies = createDefaultRuntimeModuleLoaderDependencies(),
 ) {
-  const modules = await dependencies.backend.list();
+  const snapshot = await dependencies.backend.list(dependencies.getLegacyDisabledModuleIds());
+  dependencies.clearLegacyModuleState(snapshot.modules.map((module) => module.manifest.id));
+  const modulesById = new Map(snapshot.modules.map((module) => [module.manifest.id, module]));
+  const failed = new Set<string>();
+  let shouldReload = false;
 
-  for (const module of modules) {
-    if (module.blockedVersion === module.activeVersion) {
+  for (const module of snapshot.modules) {
+    if (module.status !== "active" || !module.selectedVersion) {
       registry.register(createDiagnosticFeature(module));
+    }
+  }
+
+  for (const moduleId of snapshot.plan.activationOrder) {
+    const module = modulesById.get(moduleId);
+    if (!module || module.status !== "active" || !module.selectedVersion) continue;
+    if (module.requiredDependencies.some((dependency) => failed.has(dependency.id))) {
+      failed.add(moduleId);
+      registry.register(createDiagnosticFeature({
+        ...module,
+        status: "blocked",
+        diagnostics: [...module.diagnostics, {
+          code: "upstream_activation_failed",
+          moduleId,
+          dependencyId: null,
+          requiredVersion: null,
+          availableVersions: [],
+          relatedModules: module.requiredDependencies
+            .filter((dependency) => failed.has(dependency.id))
+            .map((dependency) => dependency.id),
+        }],
+      }));
       continue;
     }
 
     const feature = createRuntimeFeature(module, () => activateRuntimeModule(module, dependencies));
     try {
       registry.register(feature);
-      if (registry.isEnabled(feature)) await feature.setup?.();
+      await feature.setup?.();
     } catch (error) {
+      failed.add(moduleId);
       try {
-        await reportFailure(module, error, registry, dependencies);
+        shouldReload = await reportFailure(module, error, registry, dependencies) || shouldReload;
       } catch (reportError) {
         console.error(`无法记录模块 ${module.manifest.id} 的激活失败。`, reportError);
       }
     }
   }
 
-  return modules;
+  if (shouldReload) dependencies.reload();
+
+  return snapshot.modules;
 }

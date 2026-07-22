@@ -74,10 +74,16 @@ export class FeatureRegistry {
   }
 
   isEnabled(feature: FeatureModule) {
+    if (feature.source === "runtime" && feature.runtime) {
+      return feature.runtime.desiredEnabled && feature.runtime.status === "active";
+    }
     return isFeatureEnabled(feature.id, feature.defaultEnabled);
   }
 
   async setEnabled(feature: FeatureModule, enabled: boolean) {
+    if (feature.source === "runtime") {
+      throw new Error("运行时模块启停必须通过全局激活计划执行。");
+    }
     if (feature.canDisable === false && !enabled) return;
     if (enabled) {
       await feature.setup?.();

@@ -18,9 +18,25 @@ pub struct RuntimeModuleManifest {
     pub sdk_version: u32,
     pub entry: String,
     #[serde(default)]
+    pub dependencies: RuntimeModuleDependencies,
+    #[serde(default)]
     pub navigation: Vec<RuntimeNavigationManifest>,
     #[serde(default)]
     pub settings: Vec<RuntimeSettingManifest>,
+}
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq)]
+pub struct RuntimeModuleDependencies {
+    #[serde(default)]
+    pub required: Vec<RuntimeModuleDependency>,
+    #[serde(default)]
+    pub optional: Vec<RuntimeModuleDependency>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct RuntimeModuleDependency {
+    pub id: String,
+    pub version: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -107,6 +123,31 @@ impl RuntimeModuleManifest {
         }
         if self.entry != "index.js" {
             return Err("V1 module entry must be index.js".into());
+        }
+
+        let mut dependency_ids = HashSet::new();
+        for dependency in self
+            .dependencies
+            .required
+            .iter()
+            .chain(self.dependencies.optional.iter())
+        {
+            if !is_module_id(&dependency.id)
+                || matches!(dependency.id.as_str(), "system" | "logging")
+                || dependency.id == self.id
+                || !dependency_ids.insert(&dependency.id)
+            {
+                return Err(format!(
+                    "invalid, self, or duplicate dependency id: {}",
+                    dependency.id
+                ));
+            }
+            VersionReq::parse(&dependency.version).map_err(|error| {
+                format!(
+                    "invalid dependency version requirement for {}: {error}",
+                    dependency.id
+                )
+            })?;
         }
 
         let mut navigation_ids = HashSet::new();
@@ -225,6 +266,7 @@ mod tests {
             host_version: ">=0.1.0, <0.2.0".into(),
             sdk_version: 1,
             entry: "index.js".into(),
+            dependencies: RuntimeModuleDependencies::default(),
             navigation: vec![RuntimeNavigationManifest {
                 id: "hello-home".into(),
                 title: "Hello".into(),
@@ -240,6 +282,74 @@ mod tests {
     #[test]
     fn accepts_a_valid_manifest() {
         assert!(manifest().validate(&Version::new(0, 1, 0)).is_ok());
+    }
+
+    fn manifest_with_dependencies(dependencies: serde_json::Value) -> Vec<u8> {
+        let mut value = serde_json::to_value(manifest()).unwrap();
+        value["dependencies"] = dependencies;
+        serde_json::to_vec(&value).unwrap()
+    }
+
+    #[test]
+    fn treats_a_legacy_manifest_as_dependency_free() {
+        let parsed = RuntimeModuleManifest::parse_and_validate(
+            &serde_json::to_vec(&manifest()).unwrap(),
+            &Version::new(0, 1, 0),
+        )
+        .unwrap();
+        let serialized = serde_json::to_value(parsed).unwrap();
+        assert_eq!(
+            serialized["dependencies"]["required"],
+            serde_json::json!([])
+        );
+        assert_eq!(
+            serialized["dependencies"]["optional"],
+            serde_json::json!([])
+        );
+    }
+
+    #[test]
+    fn preserves_required_and_optional_dependencies() {
+        let parsed = RuntimeModuleManifest::parse_and_validate(
+            &manifest_with_dependencies(serde_json::json!({
+                "required": [{ "id": "data-provider", "version": "^1.2.0" }],
+                "optional": [{ "id": "export-tools", "version": ">=1.0.0, <2.0.0" }]
+            })),
+            &Version::new(0, 1, 0),
+        )
+        .unwrap();
+        let serialized = serde_json::to_value(parsed).unwrap();
+        assert_eq!(
+            serialized["dependencies"]["required"][0]["id"],
+            "data-provider"
+        );
+        assert_eq!(
+            serialized["dependencies"]["optional"][0]["id"],
+            "export-tools"
+        );
+    }
+
+    #[test]
+    fn rejects_self_duplicate_and_invalid_dependency_ranges() {
+        for dependencies in [
+            serde_json::json!({
+                "required": [{ "id": "hello-module", "version": "^1.0.0" }]
+            }),
+            serde_json::json!({
+                "required": [{ "id": "data-provider", "version": "^1.0.0" }],
+                "optional": [{ "id": "data-provider", "version": "^1.0.0" }]
+            }),
+            serde_json::json!({
+                "required": [{ "id": "data-provider", "version": "not a range!" }]
+            }),
+        ] {
+            let error = RuntimeModuleManifest::parse_and_validate(
+                &manifest_with_dependencies(dependencies),
+                &Version::new(0, 1, 0),
+            )
+            .unwrap_err();
+            assert!(error.contains("depend"), "unexpected error: {error}");
+        }
     }
 
     #[test]

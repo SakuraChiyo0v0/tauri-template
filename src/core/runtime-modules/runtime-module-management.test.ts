@@ -20,9 +20,19 @@ function feature(overrides: Partial<RegisteredFeature> = {}): RegisteredFeature 
         hostVersion: "^0.1.0",
         sdkVersion: 1,
         entry: "index.js",
+        dependencies: { required: [], optional: [] },
         navigation: [],
         settings: [],
       },
+      desiredEnabled: true,
+      selectedVersion: "1.0.0",
+      previousSelectedVersion: null,
+      selectedSha256: "abc",
+      status: "active",
+      diagnostics: [],
+      requiredDependencies: [],
+      optionalDependencies: [],
+      dependents: [],
       activeVersion: "1.0.0",
       previousVersion: null,
       availableVersions: ["1.0.0"],
@@ -44,23 +54,68 @@ describe("module management state", () => {
   it("enables rollback only when a runtime module has a previous version", () => {
     const withoutPrevious = getModuleManagementState(feature(), true);
     const withPrevious = getModuleManagementState(feature({
-      runtime: { ...feature().runtime!, previousVersion: "0.9.0" },
+      runtime: { ...feature().runtime!, previousSelectedVersion: "0.9.0", previousVersion: "0.9.0" },
     }), true);
 
     expect(withoutPrevious.canRollback).toBe(false);
     expect(withPrevious).toMatchObject({ sourceLabel: "运行时", canRollback: true, canUninstall: true });
   });
 
-  it("shows a blocked active version as failed and prevents a fake enable action", () => {
+  it("shows an activation failure as blocked while allowing the user to disable it", () => {
     const module = feature();
     const state = getModuleManagementState(feature({
       runtime: {
         ...module.runtime!,
+        selectedVersion: null,
+        selectedSha256: null,
+        status: "blocked",
         blockedVersion: "1.0.0",
         lastError: { version: "1.0.0", message: "activate failed", occurredAt: "now" },
       },
     }), true);
 
-    expect(state).toMatchObject({ status: "failed", canToggle: false, error: "activate failed" });
+    expect(state).toMatchObject({ status: "blocked", statusLabel: "激活受阻", canToggle: true, error: "activate failed" });
+  });
+
+  it("explains missing, incompatible, and cyclic dependencies without parsing free text", () => {
+    const base = feature().runtime!;
+    const state = getModuleManagementState(feature({
+      runtime: {
+        ...base,
+        selectedVersion: null,
+        selectedSha256: null,
+        status: "waiting",
+        diagnostics: [
+          { code: "missing_dependency", moduleId: "hello-module", dependencyId: "data-provider", requiredVersion: "^1.0.0", availableVersions: [], relatedModules: [] },
+          { code: "incompatible_dependency", moduleId: "hello-module", dependencyId: "export-tools", requiredVersion: "^2.0.0", availableVersions: ["1.0.0"], relatedModules: [] },
+          { code: "dependency_cycle", moduleId: "hello-module", dependencyId: null, requiredVersion: null, availableVersions: [], relatedModules: ["hello-module", "data-provider", "hello-module"] },
+        ],
+      },
+    }), false);
+
+    expect(state).toMatchObject({ status: "waiting", statusLabel: "等待依赖", toggleChecked: true });
+    expect(state.diagnosticMessages).toEqual([
+      "缺少 data-provider（需要 ^1.0.0）",
+      "export-tools 版本不兼容：需要 ^2.0.0，本机有 1.0.0",
+      "依赖循环：hello-module → data-provider → hello-module",
+    ]);
+  });
+
+  it("keeps direct dependents available to dependency-aware actions", () => {
+    const module = feature();
+    const state = getModuleManagementState(feature({
+      runtime: {
+        ...module.runtime!,
+        requiredDependencies: [{ id: "data-provider", version: "^1.0.0" }],
+        dependents: ["report-consumer"],
+      },
+    }), true);
+
+    expect(state).toMatchObject({
+      canToggle: true,
+      canUninstall: true,
+      requiredDependencies: ["data-provider ^1.0.0"],
+      dependents: ["report-consumer"],
+    });
   });
 });

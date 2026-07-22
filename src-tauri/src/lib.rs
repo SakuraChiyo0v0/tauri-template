@@ -11,6 +11,7 @@ pub fn run() {
             features::runtime_modules::install_runtime_module,
             features::runtime_modules::read_runtime_module_entry,
             features::runtime_modules::rollback_runtime_module,
+            features::runtime_modules::set_runtime_module_enabled,
             features::runtime_modules::report_runtime_module_activation_failure,
             features::runtime_modules::uninstall_runtime_module,
         ])

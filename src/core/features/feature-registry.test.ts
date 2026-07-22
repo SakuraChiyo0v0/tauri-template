@@ -164,14 +164,21 @@ describe("FeatureRegistry", () => {
     })).toThrow(/Custom element.*already registered/);
   });
 
-  it("runs teardown when an enabled module is disabled", async () => {
+  it("runs teardown when an enabled source module is disabled", async () => {
     const teardown = vi.fn();
-    const feature = { ...createFeature("runtime-teardown-test"), source: "runtime" as const, teardown };
+    const feature = { ...createFeature("source-teardown-test"), teardown };
     const registry = new FeatureRegistry().register(feature);
 
     await registry.setEnabled(feature, false);
 
     expect(teardown).toHaveBeenCalledTimes(1);
     expect(registry.getSettings()).toEqual([]);
+  });
+
+  it("routes runtime enable state through the Rust activation plan", async () => {
+    const feature = { ...createFeature("runtime-toggle-test"), source: "runtime" as const };
+    const registry = new FeatureRegistry().register(feature);
+
+    await expect(registry.setEnabled(feature, false)).rejects.toThrow(/全局激活计划/);
   });
 });

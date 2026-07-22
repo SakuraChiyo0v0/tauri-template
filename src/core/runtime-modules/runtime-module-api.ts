@@ -1,8 +1,8 @@
 import { invoke, isTauri } from "@tauri-apps/api/core";
 import type {
-  ActivationFailureResult,
-  InstalledRuntimeModule,
   RuntimeModuleEntry,
+  RuntimeModuleOperationResult,
+  RuntimeModulePlanSnapshot,
 } from "./runtime-module-types";
 
 function requireTauri() {
@@ -10,12 +10,24 @@ function requireTauri() {
 }
 
 export const runtimeModuleApi = {
-  async list(): Promise<InstalledRuntimeModule[]> {
-    if (!isTauri()) return [];
-    return invoke("list_runtime_modules");
+  async list(legacyDisabledModuleIds: string[] = []): Promise<RuntimeModulePlanSnapshot> {
+    if (!isTauri()) {
+      return {
+        plan: {
+          generation: 0,
+          desiredEnabled: {},
+          selectedVersions: {},
+          previousSelectedVersions: {},
+          activationOrder: [],
+          diagnostics: {},
+        },
+        modules: [],
+      };
+    }
+    return invoke("list_runtime_modules", { legacyDisabledModuleIds });
   },
 
-  async install(packagePath: string): Promise<InstalledRuntimeModule> {
+  async install(packagePath: string): Promise<RuntimeModuleOperationResult> {
     requireTauri();
     return invoke("install_runtime_module", { packagePath });
   },
@@ -25,7 +37,7 @@ export const runtimeModuleApi = {
     return invoke("read_runtime_module_entry", { moduleId });
   },
 
-  async rollback(moduleId: string): Promise<InstalledRuntimeModule> {
+  async rollback(moduleId: string): Promise<RuntimeModuleOperationResult> {
     requireTauri();
     return invoke("rollback_runtime_module", { moduleId });
   },
@@ -34,14 +46,19 @@ export const runtimeModuleApi = {
     moduleId: string,
     failedVersion: string,
     message: string,
-  ): Promise<ActivationFailureResult> {
+  ): Promise<RuntimeModuleOperationResult> {
     requireTauri();
     return invoke("report_runtime_module_activation_failure", { moduleId, failedVersion, message });
   },
 
-  async uninstall(moduleId: string): Promise<void> {
+  async setEnabled(moduleId: string, enabled: boolean): Promise<RuntimeModuleOperationResult> {
     requireTauri();
-    await invoke("uninstall_runtime_module", { moduleId });
+    return invoke("set_runtime_module_enabled", { moduleId, enabled });
+  },
+
+  async uninstall(moduleId: string): Promise<RuntimeModuleOperationResult> {
+    requireTauri();
+    return invoke("uninstall_runtime_module", { moduleId });
   },
 };
 

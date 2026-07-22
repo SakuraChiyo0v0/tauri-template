@@ -26,6 +26,22 @@ export function setFeatureEnabled(id: string, enabled: boolean) {
   listeners.forEach((listener) => listener());
 }
 
+export function getLegacyDisabledFeatureIds() {
+  return Object.entries(state)
+    .filter(([, enabled]) => enabled === false)
+    .map(([id]) => id)
+    .sort();
+}
+
+export function clearLegacyFeatureState(featureIds: readonly string[]) {
+  const ids = new Set(featureIds);
+  const next = Object.fromEntries(Object.entries(state).filter(([id]) => !ids.has(id)));
+  if (Object.keys(next).length === Object.keys(state).length) return;
+  state = next;
+  localStorage.setItem(STORAGE_KEY, JSON.stringify(state));
+  listeners.forEach((listener) => listener());
+}
+
 export function getFeatureStateSnapshot() {
   return state;
 }

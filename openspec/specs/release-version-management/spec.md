@@ -1,0 +1,37 @@
+# release-version-management Specification
+
+## Purpose
+TBD - created by archiving change add-release-versioning. Update Purpose after archive.
+## Requirements
+### Requirement: 项目版本必须保持一致
+底座 MUST 在前端包、Rust crate、Tauri 配置和 Rust 锁文件中使用同一个语义化版本。系统 SHALL 提供只读检查命令，在任一位置缺失、格式无效或版本不一致时以非零状态退出并指出差异。
+
+#### Scenario: 所有版本位置一致
+- **WHEN** 发布者运行版本检查且所有位置包含同一个合法版本
+- **THEN** 命令成功并输出当前版本
+
+#### Scenario: 检测版本漂移
+- **WHEN** 任一受管理文件中的项目版本与其他位置不同
+- **THEN** 检查命令失败并列出每个位置读取到的版本
+
+### Requirement: 版本升级必须可重复执行
+项目 MUST 提供一个命令，接受 `major`、`minor`、`patch` 或明确的语义化版本，并在全部输入通过校验后同步更新所有受管理版本位置。命令 MUST 拒绝无效版本、非递增版本、当前版本漂移和缺少目标 changelog 条目的操作。
+
+#### Scenario: 提升 minor 版本
+- **WHEN** 当前版本为 `0.1.0`，changelog 已包含 `0.2.0`，发布者请求 `minor`
+- **THEN** 所有受管理位置更新为 `0.2.0`
+
+#### Scenario: 拒绝缺少变更记录的目标版本
+- **WHEN** 发布者请求的目标版本没有对应 changelog 条目
+- **THEN** 命令在修改文件前失败
+
+#### Scenario: 拒绝版本倒退或重复
+- **WHEN** 发布者指定等于或低于当前版本的目标版本
+- **THEN** 命令在修改文件前失败
+
+### Requirement: 变更记录必须面向维护者可读
+仓库 SHALL 维护 `CHANGELOG.md`，包含未发布区和按日期排列的正式版本条目。每个正式版本 MUST 概述影响使用者或模块开发者的新增、变化、修复或移除内容，不得只依赖 Git 提交历史表达发布差异。
+
+#### Scenario: 查看发布差异
+- **WHEN** 维护者打开 changelog 查找一个正式版本
+- **THEN** 可以看到发布日期以及该版本的重要变化分类

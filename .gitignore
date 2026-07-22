@@ -12,6 +12,10 @@ dist
 dist-ssr
 *.local
 
+# User-installed runtime modules are local application data, not repository source.
+*.mtp
+/modules/
+
 # Editor directories and files
 .vscode/*
 !.vscode/extensions.json
