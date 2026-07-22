@@ -35,7 +35,9 @@ export function getSettingsSnapshot() {
 
 export function subscribeSettings(listener: () => void) {
   listeners.add(listener);
-  return () => listeners.delete(listener);
+  return () => {
+    listeners.delete(listener);
+  };
 }
 
 export function useSetting<T>(moduleId: string, settingId: string, defaultValue: T) {
