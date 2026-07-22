@@ -2,13 +2,21 @@ import packageMetadata from "../../../package.json";
 import { createModuleLogger } from "@/features/logging/logger";
 import { getSetting, setSetting, subscribeSettings } from "@/core/settings/setting-store";
 import { getThemeSnapshot, subscribeTheme } from "@/themes/theme-store";
-import type { InstalledRuntimeModule, RuntimeModuleHostSdk } from "./runtime-module-types";
+import { runtimeModuleDatabaseApi } from "./runtime-module-database-api";
+import type {
+  InstalledRuntimeModule,
+  RuntimeModuleDatabaseBackend,
+  RuntimeModuleHostSdk,
+  RuntimeModuleHostSdkV1,
+} from "./runtime-module-types";
 
-export function createRuntimeModuleHostSdk(module: InstalledRuntimeModule): RuntimeModuleHostSdk {
+export function createRuntimeModuleHostSdk(
+  module: InstalledRuntimeModule,
+  databaseBackend: RuntimeModuleDatabaseBackend = runtimeModuleDatabaseApi,
+): RuntimeModuleHostSdk {
   const moduleId = module.manifest.id;
 
-  return {
-    sdkVersion: 1,
+  const base: Omit<RuntimeModuleHostSdkV1, "sdkVersion"> = {
     hostVersion: packageMetadata.version,
     module: {
       id: moduleId,
@@ -25,6 +33,19 @@ export function createRuntimeModuleHostSdk(module: InstalledRuntimeModule): Runt
       subscribe(listener) {
         return subscribeTheme(() => listener(getThemeSnapshot()));
       },
+    },
+  };
+
+  if (module.manifest.sdkVersion === 1) return { ...base, sdkVersion: 1 };
+  return {
+    ...base,
+    sdkVersion: 2,
+    database: {
+      execute: (sql, params = []) => databaseBackend.execute(moduleId, sql, params),
+      select: (sql, params = []) => databaseBackend.select(moduleId, sql, params),
+      transaction: (statements) => databaseBackend.transaction(moduleId, statements),
+      getUserVersion: () => databaseBackend.getUserVersion(moduleId),
+      setUserVersion: (version) => databaseBackend.setUserVersion(moduleId, version),
     },
   };
 }

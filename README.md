@@ -90,15 +90,20 @@ export const exampleFeature = defineFeature({
 
 ## 添加可独立更新的运行时模块
 
-`examples/minimal-runtime-module` 是一个不会预装到底座的最小模块源码。它通过清单注册侧边栏页面和基础设置，通过单文件 ESM 入口定义 Web Component，并使用带版本的 Host SDK 访问日志、模块私有设置和主题状态。
+运行时模块在独立的 `tauri-module-template` 工作区开发，不应复制到底座仓库或注册到 `src/app/module-registry.ts`。该模板提供 Host SDK V2 类型、浏览器模拟宿主、测试、单文件 ESM 构建和 `.mtp` 打包工具。
+
+需要结构化持久化的模块应声明 Host SDK V2。底座为每个 V2 模块创建隔离的 SQLite 数据库，并通过参数化查询、执行、事务和 schema 版本接口访问；模块不能指定数据库路径、附加其他数据库或直接查询其他模块的数据。普通卸载保留数据库，停用模块后可在“模块管理”中显式清理。
 
 模块使用的 npm 库必须打包进 `index.js`；只有对其他已安装 `.mtp` 模块的要求才写入 `manifest.json` 的 `dependencies.required` 或 `dependencies.optional`。必需依赖缺失或版本不兼容时，包仍会保留，但模块会等待而不会执行；可选依赖不会阻止模块启动。依赖仅约束兼容版本与激活顺序，不允许直接导入其他模块源码或调用其内部实现。
 
 ```powershell
+cd ..\tauri-module-template
+pnpm install
+pnpm check
 pnpm module:pack
 ```
 
-命令会生成 `examples/minimal-runtime-module/dist/example-greeting-1.0.0.mtp`。在 Tauri 应用的“模块管理”中选择该文件即可安装；提高清单版本后可独立升级。回滚、停用和卸载会先检查依赖者，不会静默破坏其他模块。完整 AI 开发约束见 `.ai/recipes/add-runtime-module.md`。
+命令会在独立模块仓库的 `dist` 目录生成 `<module-id>-<version>.mtp`。在 Tauri 应用的“模块管理”中选择该文件即可安装；提高清单版本后可独立升级。回滚、停用和卸载会先检查依赖者，不会静默破坏其他模块。底座不保存第三方模块源码、构建目录或安装产物。完整 AI 开发约束见 `.ai/recipes/add-runtime-module.md`。
 
 ## 日志模块
 

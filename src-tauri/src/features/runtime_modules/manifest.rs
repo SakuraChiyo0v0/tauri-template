@@ -4,7 +4,8 @@ use semver::{Version, VersionReq};
 use serde::{Deserialize, Serialize};
 
 pub const SCHEMA_VERSION: u32 = 1;
-pub const SDK_VERSION: u32 = 1;
+pub const MIN_SDK_VERSION: u32 = 1;
+pub const MAX_SDK_VERSION: u32 = 2;
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(rename_all = "camelCase")]
@@ -100,7 +101,7 @@ impl RuntimeModuleManifest {
                 self.schema_version
             ));
         }
-        if self.sdk_version != SDK_VERSION {
+        if !(MIN_SDK_VERSION..=MAX_SDK_VERSION).contains(&self.sdk_version) {
             return Err(format!(
                 "unsupported module SDK version: {}",
                 self.sdk_version
@@ -122,7 +123,7 @@ impl RuntimeModuleManifest {
             ));
         }
         if self.entry != "index.js" {
-            return Err("V1 module entry must be index.js".into());
+            return Err("runtime module entry must be index.js".into());
         }
 
         let mut dependency_ids = HashSet::new();
@@ -282,6 +283,20 @@ mod tests {
     #[test]
     fn accepts_a_valid_manifest() {
         assert!(manifest().validate(&Version::new(0, 1, 0)).is_ok());
+    }
+
+    #[test]
+    fn accepts_sdk_v1_and_v2_but_rejects_newer_versions() {
+        let mut value = manifest();
+        value.sdk_version = 2;
+        assert!(value.validate(&Version::new(0, 1, 0)).is_ok());
+        value.sdk_version = 3;
+        assert!(
+            value
+                .validate(&Version::new(0, 1, 0))
+                .unwrap_err()
+                .contains("SDK version")
+        );
     }
 
     fn manifest_with_dependencies(dependencies: serde_json::Value) -> Vec<u8> {

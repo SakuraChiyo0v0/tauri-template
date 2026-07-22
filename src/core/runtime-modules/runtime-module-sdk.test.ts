@@ -3,7 +3,7 @@ import { clearLogEntries, getLogSnapshot } from "@/features/logging/log-store";
 import { decodeModuleLogRecord } from "@/features/logging/logger";
 import { setColorMode } from "@/themes/theme-store";
 import { createRuntimeModuleHostSdk } from "./runtime-module-sdk";
-import type { InstalledRuntimeModule } from "./runtime-module-types";
+import type { InstalledRuntimeModule, RuntimeModuleDatabaseBackend, RuntimeSqlValue } from "./runtime-module-types";
 
 function moduleRecord(): InstalledRuntimeModule {
   return {
@@ -39,6 +39,34 @@ function moduleRecord(): InstalledRuntimeModule {
 }
 
 describe("runtime module host SDK", () => {
+  it("keeps database capability absent from Host SDK V1", () => {
+    expect(createRuntimeModuleHostSdk(moduleRecord())).not.toHaveProperty("database");
+  });
+
+  it("provides namespaced database operations to Host SDK V2", async () => {
+    const module = moduleRecord();
+    module.manifest.sdkVersion = 2;
+    const select = vi.fn();
+    const database: RuntimeModuleDatabaseBackend = {
+      execute: vi.fn(async () => ({ rowsAffected: 1, lastInsertId: 7 })),
+      select: async <T extends Record<string, RuntimeSqlValue>>(moduleId: string, sql: string, params: RuntimeSqlValue[]) => {
+        select(moduleId, sql, params);
+        return [] as T[];
+      },
+      transaction: vi.fn(async () => [{ rowsAffected: 1, lastInsertId: 7 }]),
+      getUserVersion: vi.fn(async () => 0),
+      setUserVersion: vi.fn(async () => undefined),
+    };
+
+    const sdk = createRuntimeModuleHostSdk(module, database);
+    if (sdk.sdkVersion !== 2) throw new Error("expected Host SDK V2");
+    await sdk.database.execute("INSERT INTO notes(title) VALUES (?1)", ["hello"]);
+    await sdk.database.select("SELECT title FROM notes");
+
+    expect(database.execute).toHaveBeenCalledWith("sdk-test-module", "INSERT INTO notes(title) VALUES (?1)", ["hello"]);
+    expect(select).toHaveBeenCalledWith("sdk-test-module", "SELECT title FROM notes", []);
+  });
+
   it("namespaces settings to the active module", () => {
     const sdk = createRuntimeModuleHostSdk(moduleRecord());
 

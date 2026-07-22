@@ -40,6 +40,11 @@ describe("runtime module manifest", () => {
     });
   });
 
+  it("accepts Host SDK V2 and rejects unsupported newer versions", () => {
+    expect(parseRuntimeModuleManifest({ ...validManifest, sdkVersion: 2 }).sdkVersion).toBe(2);
+    expect(() => parseRuntimeModuleManifest({ ...validManifest, sdkVersion: 3 })).toThrow(/SDK version/i);
+  });
+
   it("treats a legacy manifest without dependencies as dependency-free", () => {
     expect(parseRuntimeModuleManifest(validManifest)).toMatchObject({
       dependencies: { required: [], optional: [] },

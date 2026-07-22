@@ -2,7 +2,7 @@ import type { SelectSetting, SwitchSetting } from "@/core/settings/setting-types
 import type { NavigationGroup } from "@/core/features/feature-types";
 
 export const RUNTIME_MODULE_SCHEMA_VERSION = 1;
-export const RUNTIME_MODULE_SDK_VERSION = 1;
+export const RUNTIME_MODULE_SDK_VERSION = 2;
 
 export interface RuntimeNavigationManifest {
   id: string;
@@ -32,7 +32,7 @@ export interface RuntimeModuleManifest {
   description: string;
   version: string;
   hostVersion: string;
-  sdkVersion: 1;
+  sdkVersion: 1 | 2;
   entry: string;
   dependencies: RuntimeModuleDependencies;
   navigation: RuntimeNavigationManifest[];
@@ -173,10 +173,13 @@ export function parseRuntimeModuleManifest(value: unknown): RuntimeModuleManifes
   const version = string(manifest.version, "module version", 64);
   if (!semverPattern.test(version)) throw new Error(`Invalid module version: ${version}`);
   if (manifest.schemaVersion !== RUNTIME_MODULE_SCHEMA_VERSION) throw new Error("Unsupported module schema version.");
-  if (manifest.sdkVersion !== RUNTIME_MODULE_SDK_VERSION) throw new Error("Unsupported module SDK version.");
+  if (manifest.sdkVersion !== 1 && manifest.sdkVersion !== RUNTIME_MODULE_SDK_VERSION) {
+    throw new Error("Unsupported module SDK version.");
+  }
+  const sdkVersion = manifest.sdkVersion;
 
   const entry = string(manifest.entry, "module entry", 100);
-  if (entry !== "index.js") throw new Error("V1 module entry must be index.js.");
+  if (entry !== "index.js") throw new Error("Runtime module entry must be index.js.");
 
   return {
     schemaVersion: RUNTIME_MODULE_SCHEMA_VERSION,
@@ -185,7 +188,7 @@ export function parseRuntimeModuleManifest(value: unknown): RuntimeModuleManifes
     description: string(manifest.description, "module description", 500),
     version,
     hostVersion: string(manifest.hostVersion, "host version range", 100),
-    sdkVersion: RUNTIME_MODULE_SDK_VERSION,
+    sdkVersion,
     entry,
     dependencies: parseDependencies(manifest.dependencies, id),
     navigation: parseNavigation(manifest.navigation ?? [], id),

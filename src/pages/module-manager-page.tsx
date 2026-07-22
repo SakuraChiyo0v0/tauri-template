@@ -1,15 +1,16 @@
-import { useState, useSyncExternalStore } from "react";
+import { useEffect, useState, useSyncExternalStore } from "react";
 import { isTauri } from "@tauri-apps/api/core";
 import { open } from "@tauri-apps/plugin-dialog";
-import { AlertCircle, Boxes, PackagePlus, Power, RotateCcw, Trash2 } from "lucide-react";
+import { AlertCircle, Boxes, Database, PackagePlus, Power, RotateCcw, Trash2 } from "lucide-react";
 import { featureRegistry } from "@/app/feature-registry";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Switch } from "@/components/ui/switch";
 import { runtimeModuleApi } from "@/core/runtime-modules/runtime-module-api";
+import { canClearModuleData, formatModuleDataSize, orphanedModuleData } from "@/core/runtime-modules/runtime-module-data";
 import { getModuleManagementState } from "@/core/runtime-modules/runtime-module-management";
-import type { RuntimeModuleOperationResult } from "@/core/runtime-modules/runtime-module-types";
+import type { ModuleDataInventoryItem, RuntimeModuleOperationResult } from "@/core/runtime-modules/runtime-module-types";
 
 function messageOf(error: unknown) {
   if (error && typeof error === "object" && "kind" in error) {
@@ -29,7 +30,17 @@ export function ModuleManagerPage() {
   useSyncExternalStore(featureRegistry.subscribe, featureRegistry.getSnapshot, featureRegistry.getSnapshot);
   const [busyAction, setBusyAction] = useState<string | null>(null);
   const [feedback, setFeedback] = useState<string | null>(null);
+  const [moduleData, setModuleData] = useState<ModuleDataInventoryItem[]>([]);
   const features = featureRegistry.getManageable();
+  const runtimeFeatureIds = new Set(features.filter((feature) => feature.runtime).map((feature) => feature.id));
+  const dataByModule = new Map(moduleData.map((item) => [item.moduleId, item]));
+  const orphanedData = orphanedModuleData(moduleData, runtimeFeatureIds);
+
+  useEffect(() => {
+    void runtimeModuleApi.listData()
+      .then(setModuleData)
+      .catch((error) => setFeedback(messageOf(error)));
+  }, []);
 
   const runReloadingAction = async (actionId: string, action: () => Promise<RuntimeModuleOperationResult>) => {
     setBusyAction(actionId);
@@ -68,6 +79,20 @@ export function ModuleManagerPage() {
     }
   };
 
+  const clearModuleData = async (moduleId: string) => {
+    if (!confirm(`确定清除 ${moduleId} 的全部数据库数据？此操作无法撤销。`)) return;
+    setBusyAction(`clear-data:${moduleId}`);
+    setFeedback(null);
+    try {
+      setModuleData(await runtimeModuleApi.clearData(moduleId));
+      setFeedback(`已清除 ${moduleId} 的数据库数据。`);
+    } catch (error) {
+      setFeedback(messageOf(error));
+    } finally {
+      setBusyAction(null);
+    }
+  };
+
   return (
     <section className="space-y-5">
       <div className="flex flex-wrap items-center justify-between gap-3 rounded-xl border border-border bg-card p-4">
@@ -91,6 +116,7 @@ export function ModuleManagerPage() {
           const enabled = featureRegistry.isEnabled(feature);
           const state = getModuleManagementState(feature, enabled);
           const runtime = feature.runtime;
+          const data = dataByModule.get(feature.id);
           const isBusy = busyAction?.endsWith(`:${feature.id}`) ?? false;
 
           return (
@@ -110,6 +136,11 @@ export function ModuleManagerPage() {
                   {runtime && (
                     <p className="text-xs text-muted-foreground">
                       已选择 {runtime.selectedVersion ? `v${runtime.selectedVersion}` : "无"} · 已安装 {state.availableVersions.map((version) => `v${version}`).join("、")}
+                    </p>
+                  )}
+                  {runtime && data && (
+                    <p className="flex items-center gap-1.5 text-xs text-muted-foreground">
+                      <Database className="size-3.5" />数据库占用 {formatModuleDataSize(data.sizeBytes)}
                     </p>
                   )}
                 </div>
@@ -162,6 +193,17 @@ export function ModuleManagerPage() {
 
                 {runtime && (
                   <div className="flex items-center gap-2">
+                    {data && (
+                      <Button
+                        variant="outline"
+                        size="sm"
+                        disabled={!canClearModuleData(state.status, true) || busyAction !== null}
+                        title={state.status === "active" ? "请先停用模块再清除数据" : undefined}
+                        onClick={() => void clearModuleData(feature.id)}
+                      >
+                        <Database className="size-3.5" />{isBusy && busyAction?.startsWith("clear-data") ? "清除中…" : "清除数据"}
+                      </Button>
+                    )}
                     <Button
                       variant="outline"
                       size="sm"
@@ -191,6 +233,35 @@ export function ModuleManagerPage() {
           );
         })}
       </div>
+
+      {orphanedData.length > 0 && (
+        <section className="space-y-3">
+          <div>
+            <h3 className="font-semibold">保留的模块数据</h3>
+            <p className="mt-1 text-sm text-muted-foreground">模块卸载后数据库默认保留，重新安装可继续使用。</p>
+          </div>
+          <div className="grid gap-3 md:grid-cols-2">
+            {orphanedData.map((data) => (
+              <Card key={data.moduleId}>
+                <CardContent className="flex items-center justify-between gap-3 pt-5">
+                  <div className="min-w-0">
+                    <p className="flex items-center gap-2 font-medium"><Database className="size-4 text-primary" />{data.moduleId}</p>
+                    <p className="mt-1 text-xs text-muted-foreground">数据库占用 {formatModuleDataSize(data.sizeBytes)}</p>
+                  </div>
+                  <Button
+                    variant="destructive"
+                    size="sm"
+                    disabled={busyAction !== null}
+                    onClick={() => void clearModuleData(data.moduleId)}
+                  >
+                    <Trash2 className="size-3.5" />{busyAction === `clear-data:${data.moduleId}` ? "清除中…" : "清除数据"}
+                  </Button>
+                </CardContent>
+              </Card>
+            ))}
+          </div>
+        </section>
+      )}
     </section>
   );
 }

@@ -1,6 +1,7 @@
 import { invoke, isTauri } from "@tauri-apps/api/core";
 import type {
   RuntimeModuleEntry,
+  ModuleDataInventoryItem,
   RuntimeModuleOperationResult,
   RuntimeModulePlanSnapshot,
 } from "./runtime-module-types";
@@ -59,6 +60,16 @@ export const runtimeModuleApi = {
   async uninstall(moduleId: string): Promise<RuntimeModuleOperationResult> {
     requireTauri();
     return invoke("uninstall_runtime_module", { moduleId });
+  },
+
+  async listData(): Promise<ModuleDataInventoryItem[]> {
+    if (!isTauri()) return [];
+    return invoke("list_runtime_module_data");
+  },
+
+  async clearData(moduleId: string): Promise<ModuleDataInventoryItem[]> {
+    requireTauri();
+    return invoke("clear_runtime_module_data", { moduleId });
   },
 };
 

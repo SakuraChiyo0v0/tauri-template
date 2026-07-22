@@ -97,8 +97,35 @@ export interface RuntimeModuleLogger {
   write(level: LogLevel, message: string): Promise<void>;
 }
 
-export interface RuntimeModuleHostSdk {
-  readonly sdkVersion: 1;
+export type RuntimeSqlValue = null | boolean | number | string | number[];
+
+export interface RuntimeDatabaseStatement {
+  sql: string;
+  params?: RuntimeSqlValue[];
+}
+
+export interface RuntimeDatabaseExecuteResult {
+  rowsAffected: number;
+  lastInsertId: number;
+}
+
+export interface RuntimeModuleDatabaseBackend {
+  execute(moduleId: string, sql: string, params: RuntimeSqlValue[]): Promise<RuntimeDatabaseExecuteResult>;
+  select<T extends Record<string, RuntimeSqlValue>>(moduleId: string, sql: string, params: RuntimeSqlValue[]): Promise<T[]>;
+  transaction(moduleId: string, statements: RuntimeDatabaseStatement[]): Promise<RuntimeDatabaseExecuteResult[]>;
+  getUserVersion(moduleId: string): Promise<number>;
+  setUserVersion(moduleId: string, version: number): Promise<void>;
+}
+
+export interface RuntimeModuleDatabase {
+  execute(sql: string, params?: RuntimeSqlValue[]): Promise<RuntimeDatabaseExecuteResult>;
+  select<T extends Record<string, RuntimeSqlValue>>(sql: string, params?: RuntimeSqlValue[]): Promise<T[]>;
+  transaction(statements: RuntimeDatabaseStatement[]): Promise<RuntimeDatabaseExecuteResult[]>;
+  getUserVersion(): Promise<number>;
+  setUserVersion(version: number): Promise<void>;
+}
+
+interface RuntimeModuleHostSdkBase {
   readonly hostVersion: string;
   readonly module: {
     readonly id: string;
@@ -114,6 +141,23 @@ export interface RuntimeModuleHostSdk {
     get(): ThemeState;
     subscribe(listener: (theme: ThemeState) => void): () => void;
   };
+}
+
+export interface RuntimeModuleHostSdkV1 extends RuntimeModuleHostSdkBase {
+  readonly sdkVersion: 1;
+}
+
+export interface RuntimeModuleHostSdkV2 extends RuntimeModuleHostSdkBase {
+  readonly sdkVersion: 2;
+  readonly database: RuntimeModuleDatabase;
+}
+
+export type RuntimeModuleHostSdk = RuntimeModuleHostSdkV1 | RuntimeModuleHostSdkV2;
+
+export interface ModuleDataInventoryItem {
+  moduleId: string;
+  sizeBytes: number;
+  installed: boolean;
 }
 
 export interface RuntimeModuleExports {
