@@ -1562,20 +1562,33 @@ mod tests {
         let first_package = std::env::var("MTP_SMOKE_V1").expect("MTP_SMOKE_V1 is required");
         let second_package = std::env::var("MTP_SMOKE_V2").expect("MTP_SMOKE_V2 is required");
         let temp = tempfile::tempdir().unwrap();
-        let store = store(temp.path());
+        let store = ModuleStore::new(
+            temp.path().join("modules"),
+            Version::parse(env!("CARGO_PKG_VERSION")).unwrap(),
+        );
 
         let installed = store.install(Path::new(&first_package)).unwrap();
-        assert_eq!(installed.active_version, "1.0.0");
+        let module_id = installed.manifest.id.clone();
+        let first_version = installed.manifest.version.clone();
+        assert_eq!(installed.active_version, first_version);
         assert!(store.install(Path::new(&first_package)).is_err());
-        assert_eq!(store.list().unwrap()[0].active_version, "1.0.0");
+        assert_eq!(store.list().unwrap()[0].active_version, first_version);
 
         let upgraded = store.install(Path::new(&second_package)).unwrap();
-        assert_eq!(upgraded.active_version, "1.1.0");
-        assert_eq!(upgraded.previous_version.as_deref(), Some("1.0.0"));
+        assert_eq!(upgraded.manifest.id, module_id);
+        assert!(
+            Version::parse(&upgraded.manifest.version).unwrap()
+                > Version::parse(&first_version).unwrap()
+        );
+        assert_eq!(upgraded.active_version, upgraded.manifest.version);
+        assert_eq!(
+            upgraded.previous_version.as_deref(),
+            Some(first_version.as_str())
+        );
 
-        let rolled_back = store.rollback("example-greeting").unwrap();
-        assert_eq!(rolled_back.active_version, "1.0.0");
-        store.uninstall("example-greeting").unwrap();
+        let rolled_back = store.rollback(&module_id).unwrap();
+        assert_eq!(rolled_back.active_version, first_version);
+        store.uninstall(&module_id).unwrap();
         assert!(store.list().unwrap().is_empty());
     }
 }

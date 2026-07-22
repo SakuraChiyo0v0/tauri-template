@@ -11,7 +11,6 @@
     "check": "pnpm typecheck && pnpm test && pnpm build",
     "build": "tsc --noEmit && vite build",
     "preview": "vite preview",
-    "module:pack": "node scripts/package-runtime-module.mjs",
     "version:check": "node scripts/version.mjs check",
     "version:bump": "node scripts/version.mjs bump",
     "tauri": "tauri"
