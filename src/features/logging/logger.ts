@@ -24,17 +24,21 @@ const consoleLoggers = {
   warn: console.warn,
   error: console.error,
 };
+const MODULE_LOG_PREFIX = "\u2063mtp:";
 
-async function write(level: LogLevel, message: string) {
+async function write(level: LogLevel, message: string, source = "frontend") {
   if (!isFeatureEnabled(featureId, true)) return;
   const threshold = getSetting<LogLevel>(featureId, "level", "info");
   if (ranks[level] < ranks[threshold]) return;
 
   if (getSetting(featureId, "mirrorToConsole", true)) consoleLoggers[level](message);
   if (isTauri()) {
-    await pluginLoggers[level](message);
+    const nativeMessage = source === "frontend"
+      ? message
+      : `${MODULE_LOG_PREFIX}${JSON.stringify({ source, message })}`;
+    await pluginLoggers[level](nativeMessage);
   } else {
-    appendLogEntry({ level, source: "frontend", message });
+    appendLogEntry({ level, source, message });
   }
 }
 
@@ -45,6 +49,31 @@ export const logger = {
   warn: (message: string) => write("warn", message),
   error: (message: string) => write("error", message),
 };
+
+export function createModuleLogger(moduleId: string) {
+  return {
+    trace: (message: string) => write("trace", message, moduleId),
+    debug: (message: string) => write("debug", message, moduleId),
+    info: (message: string) => write("info", message, moduleId),
+    warn: (message: string) => write("warn", message, moduleId),
+    error: (message: string) => write("error", message, moduleId),
+    write: (level: LogLevel, message: string) => write(level, message, moduleId),
+  };
+}
+
+export function decodeModuleLogRecord(message: string): { source: string; message: string } | null {
+  const markerIndex = message.indexOf(MODULE_LOG_PREFIX);
+  if (markerIndex < 0) return null;
+  try {
+    const value = JSON.parse(message.slice(markerIndex + MODULE_LOG_PREFIX.length)) as { source?: unknown; message?: unknown };
+    if (typeof value.source === "string" && typeof value.message === "string") {
+      return { source: value.source, message: value.message };
+    }
+  } catch {
+    // A malformed marker is treated as an ordinary runtime log below.
+  }
+  return null;
+}
 
 export async function applyNativeLogLevel(value: unknown) {
   if (isTauri() && typeof value === "string") await invoke("set_log_level", { level: value });
@@ -57,10 +86,11 @@ export function attachNativeLogBridge() {
   if (nativeLogBridge) return nativeLogBridge;
 
   nativeLogBridge = attachLogger((record) => {
+    const moduleLog = decodeModuleLogRecord(record.message);
     appendLogEntry({
       level: nativeLevels[record.level] ?? "info",
-      source: "runtime",
-      message: record.message,
+      source: moduleLog?.source ?? "runtime",
+      message: moduleLog?.message ?? record.message,
     });
   }).then(() => undefined);
 

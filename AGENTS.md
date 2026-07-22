@@ -8,7 +8,8 @@ Read this file before changing the project. Keep the template free of demo busin
 - `src/themes` owns semantic design tokens and theme selection.
 - `src/core` owns stable extension contracts and persistence helpers.
 - `src/features/<feature>` owns one removable feature and its settings contributions.
-- `src/app/module-registry.ts` is the only frontend module installation list.
+- `src/app/module-registry.ts` is the only source-module installation list.
+- `src/core/runtime-modules` owns the stable `.mtp` package, loader, lifecycle, and Host SDK boundary.
 - The application shell renders navigation contributed by enabled modules; it never imports feature pages directly.
 - `src-tauri/src/features` mirrors features that need native Rust behavior.
 
@@ -20,7 +21,9 @@ Read this file before changing the project. Keep the template free of demo busin
 - Contribute settings through the feature manifest. Never add feature-specific conditions to `SettingsPage`.
 - Use semantic classes such as `bg-primary` and `text-muted-foreground`. Do not hard-code product colors in components or features.
 - Keep feature imports one-way: features may depend on `core`, `components/ui`, and their own files. Features must not import another feature's internals.
-- Keep source-level installation explicit. Do not add runtime remote-code loading.
+- Keep source-level installation explicit. Runtime modules must be user-selected local `.mtp` packages; do not add remote downloads, a plugin store, dynamic Rust, or extra native permissions without a new specification.
+- Runtime modules contribute navigation and basic settings only through `manifest.json`; never add module-specific branches to the shell or settings page.
+- Treat the Host SDK as a public ABI. Do not expose internal stores, the feature registry, raw Tauri invoke, or arbitrary filesystem access.
 - Add focused tests for registry contracts and observable behavior.
 
 ## Verification

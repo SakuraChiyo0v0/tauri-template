@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { FeatureRegistry } from "./feature-registry";
 import { defineFeature } from "./feature-types";
 
@@ -94,5 +94,84 @@ describe("FeatureRegistry", () => {
     await registry.setEnabled(feature, false);
 
     expect(registry.getNavigation()).toEqual([]);
+  });
+
+  it("marks source modules as builtin and accepts runtime modules", () => {
+    const registry = new FeatureRegistry()
+      .register(createFeature("builtin-source-test"))
+      .register({ ...createFeature("runtime-source-test"), source: "runtime" });
+
+    expect(registry.getAll().map(({ id, source }) => ({ id, source }))).toEqual([
+      { id: "builtin-source-test", source: "builtin" },
+      { id: "runtime-source-test", source: "runtime" },
+    ]);
+  });
+
+  it("unregisters a runtime module and notifies subscribers", () => {
+    const registry = new FeatureRegistry().register({ ...createFeature("runtime-remove-test"), source: "runtime" });
+    const listener = vi.fn();
+    const unsubscribe = registry.subscribe(listener);
+
+    expect(registry.unregister("runtime-remove-test")).toBe(true);
+    expect(registry.getAll()).toEqual([]);
+    expect(listener).toHaveBeenCalledTimes(1);
+    unsubscribe();
+  });
+
+  it("does not allow runtime removal of a builtin module", () => {
+    const registry = new FeatureRegistry().register(createFeature("builtin-remove-test"));
+
+    expect(registry.unregister("builtin-remove-test")).toBe(false);
+    expect(registry.getAll()).toHaveLength(1);
+  });
+
+  it("keeps existing registrations unchanged when a runtime contribution conflicts", () => {
+    const registry = new FeatureRegistry().register(defineFeature({
+      id: "existing-navigation-test",
+      name: "Existing",
+      description: "Existing navigation",
+      version: "1.0.0",
+      defaultEnabled: true,
+      navigation: [{ id: "shared-navigation", title: "Existing", icon: () => null, component: EmptyPage }],
+    }));
+    const listener = vi.fn();
+    registry.subscribe(listener);
+
+    expect(() => registry.register(defineFeature({
+      id: "conflicting-runtime-test",
+      source: "runtime",
+      name: "Conflict",
+      description: "Conflicting navigation",
+      version: "1.0.0",
+      defaultEnabled: true,
+      navigation: [{ id: "shared-navigation", title: "Conflict", icon: () => null, component: EmptyPage }],
+    }))).toThrow(/already registered/);
+    expect(registry.getAll().map((feature) => feature.id)).toEqual(["existing-navigation-test"]);
+    expect(listener).not.toHaveBeenCalled();
+  });
+
+  it("rejects custom element conflicts between runtime modules", () => {
+    const registry = new FeatureRegistry().register({
+      ...createFeature("runtime-elements-one"),
+      source: "runtime",
+      elementNames: ["shared-runtime-page"],
+    });
+
+    expect(() => registry.register({
+      ...createFeature("runtime-elements-two"),
+      source: "runtime",
+      elementNames: ["shared-runtime-page"],
+    })).toThrow(/Custom element.*already registered/);
+  });
+
+  it("runs teardown when an enabled module is disabled", async () => {
+    const teardown = vi.fn();
+    const feature = { ...createFeature("runtime-teardown-test"), source: "runtime" as const, teardown };
+    const registry = new FeatureRegistry().register(feature);
+
+    await registry.setEnabled(feature, false);
+
+    expect(teardown).toHaveBeenCalledTimes(1);
+    expect(registry.getSettings()).toEqual([]);
   });
 });

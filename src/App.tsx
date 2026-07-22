@@ -1,9 +1,8 @@
-import { useEffect, useState } from "react";
+import { useEffect, useState, useSyncExternalStore } from "react";
 import { Boxes, PanelLeftClose, PanelLeftOpen } from "lucide-react";
 import { featureRegistry } from "@/app/feature-registry";
 import { readStoredNavigationId, resolveActiveNavigation, storeNavigationId } from "@/app/navigation-state";
 import { Badge } from "@/components/ui/badge";
-import { useFeatureStateSnapshot } from "@/core/features/feature-state";
 import type { ResolvedNavigation } from "@/core/features/feature-types";
 import { cn } from "@/lib/utils";
 
@@ -38,7 +37,7 @@ function NavigationButton({ entry, active, collapsed, onSelect }: {
 }
 
 function App() {
-  useFeatureStateSnapshot();
+  useSyncExternalStore(featureRegistry.subscribe, featureRegistry.getSnapshot, featureRegistry.getSnapshot);
   const navigation = featureRegistry.getNavigation();
   const [requestedNavigationId, setRequestedNavigationId] = useState(readStoredNavigationId);
   const [sidebarCollapsed, setSidebarCollapsed] = useState(

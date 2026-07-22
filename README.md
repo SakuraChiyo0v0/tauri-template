@@ -1,6 +1,6 @@
 # Modular Tauri Template
 
-一个保持空业务、但已经准备好主题、基础组件和源码模块扩展点的 Tauri 2 桌面应用模板。
+一个保持空业务、但已经准备好主题、基础组件、源码模块和本地运行时模块扩展点的 Tauri 2 桌面应用底座。
 
 ## 开始使用
 
@@ -27,9 +27,9 @@ pnpm tauri build
 - `features` 保存可从源码添加或移除的功能模块。
 - `App` 只渲染模块贡献的侧边栏和页面，不直接依赖具体功能。
 - `SettingsPage` 不感知具体模块；模块通过清单贡献设置。
-- 首版不提供运行时下载、远程执行或插件市场。
+- 运行时模块通过用户主动选择的本地 `.mtp` 包安装；首版不提供远程下载、插件市场、动态 Rust 或额外系统权限。
 
-## 添加模块
+## 添加源码模块
 
 模块使用一个清单声明元数据和扩展：
 
@@ -67,6 +67,16 @@ export const exampleFeature = defineFeature({
 然后仅在 `src/app/module-registry.ts` 注册一次。侧边栏会自动显示已启用模块贡献的页面，设置页会自动按 `group` 和 `order` 显示设置项。停用模块时，这两类扩展都会自动消失。
 
 更完整的 AI 操作步骤位于 `.ai/recipes`。仓库根目录及关键目录中的 `AGENTS.md` 定义了模块边界和验证规则。
+
+## 添加可独立更新的运行时模块
+
+`examples/minimal-runtime-module` 是一个不会预装到底座的最小模块源码。它通过清单注册侧边栏页面和基础设置，通过单文件 ESM 入口定义 Web Component，并使用带版本的 Host SDK 访问日志、模块私有设置和主题状态。
+
+```powershell
+pnpm module:pack
+```
+
+命令会生成 `examples/minimal-runtime-module/dist/example-greeting-1.0.0.mtp`。在 Tauri 应用的“模块管理”中选择该文件即可安装；提高清单版本后可独立升级，并可从管理页回滚或卸载。完整 AI 开发约束见 `.ai/recipes/add-runtime-module.md`。
 
 ## 日志模块
 

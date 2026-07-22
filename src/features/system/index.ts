@@ -15,7 +15,7 @@ export const systemFeature = defineFeature({
     {
       id: "modules",
       title: "模块管理",
-      description: "查看和控制已安装的源码模块",
+      description: "查看和控制内置模块与本地运行时模块",
       icon: Boxes,
       component: ModuleManagerPage,
       group: "main",
