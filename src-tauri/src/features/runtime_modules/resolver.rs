@@ -476,6 +476,7 @@ mod tests {
                     .collect(),
             },
             services: Default::default(),
+            events: Default::default(),
             navigation: Vec::new(),
             settings: Vec::new(),
             native_capabilities: Default::default(),
