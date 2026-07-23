@@ -1,4 +1,7 @@
-use std::time::Duration;
+use std::{
+    net::{SocketAddr, ToSocketAddrs},
+    time::Duration,
+};
 
 use serde::{Deserialize, Serialize};
 
@@ -6,7 +9,6 @@ const MAX_REQUEST_BODY: usize = 1024 * 1024;
 const MAX_RESPONSE_BODY: usize = 5 * 1024 * 1024;
 const MAX_TIMEOUT_MS: u64 = 30_000;
 const DEFAULT_TIMEOUT_MS: u64 = 15_000;
-const MAX_REDIRECTS: usize = 3;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -64,9 +66,45 @@ pub fn is_private_host(host: &str) -> bool {
 
 fn is_private_ip(ip: &std::net::IpAddr) -> bool {
     match ip {
-        std::net::IpAddr::V4(v4) => v4.is_private() || v4.is_link_local() || v4.is_broadcast(),
-        std::net::IpAddr::V6(v6) => v6.is_loopback() || v6.is_unspecified() || (v6.segments()[0] & 0xfe00) == 0xfc00,
+        std::net::IpAddr::V4(v4) => {
+            v4.is_private()
+                || v4.is_loopback()
+                || v4.is_unspecified()
+                || v4.is_link_local()
+                || v4.is_broadcast()
+        }
+        std::net::IpAddr::V6(v6) => {
+            v6.is_loopback()
+                || v6.is_unspecified()
+                || v6.is_unicast_link_local()
+                || (v6.segments()[0] & 0xfe00) == 0xfc00
+        }
     }
+}
+
+fn resolve_public_host(host: &str, port: u16) -> Result<Vec<SocketAddr>, String> {
+    let addresses = (host, port)
+        .to_socket_addrs()
+        .map_err(|error| format!("resolve HTTP host: {error}"))?
+        .collect::<Vec<_>>();
+    validate_resolved_addresses(&addresses)?;
+    Ok(addresses)
+}
+
+fn validate_resolved_addresses(addresses: &[SocketAddr]) -> Result<(), String> {
+    let mut resolved_any_address = false;
+    let mut has_private_address = false;
+    for address in addresses {
+        resolved_any_address = true;
+        has_private_address |= is_private_ip(&address.ip());
+    }
+    if !resolved_any_address {
+        return Err("HTTP host did not resolve to an address".into());
+    }
+    if has_private_address {
+        return Err("private host addresses are not allowed".into());
+    }
+    Ok(())
 }
 
 pub fn validate_request(request: &ModuleHttpRequest, allowed_origins: &[String]) -> Result<(), String> {
@@ -102,13 +140,19 @@ pub fn execute_request(module_id: &str, allowed_origins: &[String], request: Mod
     if let Err(error) = validate_request(&request, allowed_origins) {
         return Ok(HttpProxyResult { module_id: module_id.into(), response: None, error: Some(error) });
     }
+    let parsed = url::Url::parse(&request.url).map_err(|error| format!("invalid URL: {error}"))?;
+    let host = parsed.host_str().ok_or("URL has no host")?;
+    let port = parsed.port_or_known_default().ok_or("URL has no known port")?;
+    let resolved_addresses = match resolve_public_host(host, port) {
+        Ok(addresses) => addresses,
+        Err(error) => return Ok(HttpProxyResult { module_id: module_id.into(), response: None, error: Some(error) }),
+    };
     let timeout_ms = request.timeout_ms.unwrap_or(DEFAULT_TIMEOUT_MS).min(MAX_TIMEOUT_MS);
     let method = method_from_str(&request.method);
-    let client = reqwest::blocking::Client::builder()
-        .timeout(Duration::from_millis(timeout_ms))
-        .redirect(reqwest::redirect::Policy::limited(MAX_REDIRECTS))
-        .build()
-        .map_err(|error| format!("build http client: {error}"))?;
+    let client = build_http_client(
+        Duration::from_millis(timeout_ms),
+        Some((host, &resolved_addresses)),
+    )?;
     let mut request_builder = client.request(method, &request.url);
     for (name, value) in &request.headers {
         request_builder = request_builder.header(name, value);
@@ -130,6 +174,21 @@ pub fn execute_request(module_id: &str, allowed_origins: &[String], request: Mod
     Ok(HttpProxyResult { module_id: module_id.into(), response: Some(ModuleHttpResponse { status, headers, body, truncated }), error: None })
 }
 
+fn build_http_client(
+    timeout: Duration,
+    resolved_host: Option<(&str, &[SocketAddr])>,
+) -> Result<reqwest::blocking::Client, String> {
+    let mut builder = reqwest::blocking::Client::builder()
+        .timeout(timeout)
+        .redirect(reqwest::redirect::Policy::none());
+    if let Some((host, addresses)) = resolved_host {
+        builder = builder.resolve_to_addrs(host, addresses);
+    }
+    builder
+        .build()
+        .map_err(|error| format!("build http client: {error}"))
+}
+
 fn method_from_str(method: &str) -> reqwest::Method {
     match method.to_ascii_uppercase().as_str() {
         "GET" => reqwest::Method::GET,
@@ -144,6 +203,11 @@ fn method_from_str(method: &str) -> reqwest::Method {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::{
+        io::{Read, Write},
+        net::{SocketAddr, TcpListener},
+        thread,
+    };
 
     #[test]
     fn extracts_https_origin() {
@@ -174,5 +238,64 @@ mod tests {
         assert!(validate_request(&ModuleHttpRequest { headers: vec![("Cookie".into(), "x".into())], ..request.clone() }, &["https://api.example.com".into()]).is_err());
     }
 
+    #[test]
+    fn rejects_dns_resolution_to_private_address() {
+        let addresses = [SocketAddr::from(([127, 0, 0, 1], 443))];
 
+        assert_eq!(
+            validate_resolved_addresses(&addresses),
+            Err("private host addresses are not allowed".to_string())
+        );
+    }
+
+    #[test]
+    fn disables_automatic_redirects() {
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let address = listener.local_addr().unwrap();
+        let response_thread = thread::spawn(move || {
+            let (mut stream, _) = listener.accept().unwrap();
+            let mut request = [0_u8; 1024];
+            stream.read(&mut request).unwrap();
+            stream
+                .write_all(
+                    b"HTTP/1.1 302 Found\r\nLocation: http://127.0.0.1/metadata\r\nContent-Length: 0\r\nConnection: close\r\n\r\n",
+                )
+                .unwrap();
+        });
+
+        let response = build_http_client(Duration::from_secs(1), None)
+            .unwrap()
+            .get(format!("http://{address}"))
+            .send()
+            .unwrap();
+
+        response_thread.join().unwrap();
+        assert_eq!(response.status(), reqwest::StatusCode::FOUND);
+    }
+
+    #[test]
+    fn sends_requests_to_validated_resolved_addresses() {
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let address = listener.local_addr().unwrap();
+        let response_thread = thread::spawn(move || {
+            let (mut stream, _) = listener.accept().unwrap();
+            let mut request = [0_u8; 1024];
+            stream.read(&mut request).unwrap();
+            stream
+                .write_all(b"HTTP/1.1 200 OK\r\nContent-Length: 2\r\nConnection: close\r\n\r\nok")
+                .unwrap();
+        });
+
+        let response = build_http_client(
+            Duration::from_secs(1),
+            Some(("public.example.test", &[address])),
+        )
+        .unwrap()
+        .get("http://public.example.test")
+        .send()
+        .unwrap();
+
+        response_thread.join().unwrap();
+        assert_eq!(response.status(), reqwest::StatusCode::OK);
+    }
 }
