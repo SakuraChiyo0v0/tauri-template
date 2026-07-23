@@ -5,6 +5,7 @@ import { readStoredNavigationId, resolveActiveNavigation, storeNavigationId } fr
 import { Badge } from "@/components/ui/badge";
 import type { ResolvedNavigation } from "@/core/features/feature-types";
 import { useI18n } from "@/core/i18n/use-i18n";
+import { ModuleDialogContainer } from "@/core/runtime-modules/runtime-module-dialog-container";
 import { cn } from "@/lib/utils";
 
 const SIDEBAR_STORAGE_KEY = "modular-tauri.sidebar-collapsed.v1";
@@ -152,6 +153,7 @@ function App() {
           </div>
         </main>
       </div>
+      <ModuleDialogContainer />
     </div>
   );
 }

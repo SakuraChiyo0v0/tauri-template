@@ -3,7 +3,7 @@ import type { NavigationGroup } from "@/core/features/feature-types";
 import { isLocalizedText, type LocalizedText } from "@/core/i18n/localized-text";
 
 export const RUNTIME_MODULE_SCHEMA_VERSION = 2;
-export const RUNTIME_MODULE_SDK_VERSION = 5;
+export const RUNTIME_MODULE_SDK_VERSION = 12;
 
 export type RuntimeExternalFileAccess = "read" | "write" | "list";
 export type RuntimeRegistryAccess = "read" | "read-write";
@@ -15,6 +15,9 @@ export interface RuntimeNativeCapabilities {
   tray: Array<{ id: string; label?: LocalizedText; kind: "button" | "check" | "separator"; order: number }>;
   shortcuts: Array<{ id: string; description: LocalizedText; accelerator: string }>;
   moduleRepository?: { install: true } | null;
+  notifications?: { system: true } | null;
+  clipboard?: { text: true } | null;
+  http?: { origins: string[] } | null;
 }
 
 export interface RuntimeNavigationManifest {
@@ -42,6 +45,11 @@ export interface RuntimeModuleServicesManifest {
   provides: string[];
 }
 
+export interface RuntimeModuleEventsManifest {
+  publishes: string[];
+  subscribes: string[];
+}
+
 export interface RuntimeModuleManifest {
   schemaVersion: 2;
   id: string;
@@ -49,10 +57,11 @@ export interface RuntimeModuleManifest {
   description: LocalizedText;
   version: string;
   hostVersion: string;
-  sdkVersion: 2 | 3 | 4 | 5;
+  sdkVersion: 2 | 3 | 4 | 5 | 6 | 7 | 8 | 9 | 10 | 11 | 12;
   entry: string;
   dependencies: RuntimeModuleDependencies;
   services?: RuntimeModuleServicesManifest;
+  events?: RuntimeModuleEventsManifest;
   navigation: RuntimeNavigationManifest[];
   settings: RuntimeSettingManifest[];
   nativeCapabilities?: RuntimeNativeCapabilities;
@@ -91,7 +100,7 @@ function optionalLocalizedText(value: unknown, label: string, maxLength = 200) {
 
 function parseNativeCapabilities(value: unknown): RuntimeNativeCapabilities {
   const capabilities = object(value, "nativeCapabilities");
-  const allowedKeys = new Set(["filesystem", "process", "registry", "tray", "shortcuts", "moduleRepository"]);
+  const allowedKeys = new Set(["filesystem", "process", "registry", "tray", "shortcuts", "moduleRepository", "notifications", "clipboard", "http"]);
   const unknownKey = Object.keys(capabilities).find((key) => !allowedKeys.has(key));
   if (unknownKey) throw new Error(`Unknown native capability: ${unknownKey}`);
 
@@ -170,7 +179,36 @@ function parseNativeCapabilities(value: unknown): RuntimeNativeCapabilities {
     }
     return { install: true as const };
   })();
-  return { filesystem, process, registry, tray, shortcuts, moduleRepository };
+  const notifications = capabilities.notifications == null ? null : (() => {
+    const item = object(capabilities.notifications, "nativeCapabilities.notifications");
+    if (Object.keys(item).some((key) => key !== "system") || item.system !== true) {
+      throw new Error("Invalid native notifications capability.");
+    }
+    return { system: true as const };
+  })();
+  const clipboard = capabilities.clipboard == null ? null : (() => {
+    const item = object(capabilities.clipboard, "nativeCapabilities.clipboard");
+    if (Object.keys(item).some((key) => key !== "text") || item.text !== true) {
+      throw new Error("Invalid native clipboard capability.");
+    }
+    return { text: true as const };
+  })();
+  const http = capabilities.http == null ? null : (() => {
+    const item = object(capabilities.http, "nativeCapabilities.http");
+    if (Object.keys(item).some((key) => key !== "origins") || !Array.isArray(item.origins)) {
+      throw new Error("Invalid native http capability.");
+    }
+    const seen = new Set<string>();
+    const origins = item.origins.map((origin: unknown, index: number) => {
+      const value = string(origin, `nativeCapabilities.http.origins[${index}]`, 200);
+      if (!value.startsWith("https://")) throw new Error(`Invalid http origin: ${value}`);
+      if (seen.has(value)) throw new Error(`Duplicate http origin: ${value}`);
+      seen.add(value);
+      return value;
+    });
+    return { origins };
+  })();
+  return { filesystem, process, registry, tray, shortcuts, moduleRepository, notifications, clipboard, http };
 }
 
 function parseDependencies(value: unknown, moduleId: string): RuntimeModuleDependencies {
@@ -202,7 +240,7 @@ function parseDependencies(value: unknown, moduleId: string): RuntimeModuleDepen
   };
 }
 
-function parseServices(value: unknown, sdkVersion: 2 | 3 | 4 | 5): RuntimeModuleServicesManifest {
+function parseServices(value: unknown, sdkVersion: 2 | 3 | 4 | 5 | 6 | 7 | 8 | 9 | 10 | 11 | 12): RuntimeModuleServicesManifest {
   if (value === undefined) return { provides: [] };
   if (sdkVersion < 4) throw new Error("Module services require Host SDK V4.");
   const services = object(value, "services");
@@ -216,6 +254,31 @@ function parseServices(value: unknown, sdkVersion: 2 | 3 | 4 | 5): RuntimeModule
     return id;
   });
   return { provides };
+}
+
+function parseEvents(value: unknown, sdkVersion: 2 | 3 | 4 | 5 | 6 | 7 | 8 | 9 | 10 | 11 | 12): RuntimeModuleEventsManifest {
+  if (value === undefined) return { publishes: [], subscribes: [] };
+  if (sdkVersion < 7) throw new Error("Module events require Host SDK V7.");
+  const events = object(value, "events");
+  const unknownKey = Object.keys(events).find((key) => key !== "publishes" && key !== "subscribes");
+  if (unknownKey) throw new Error(`Invalid module events declaration: unknown key ${unknownKey}.`);
+
+  const parseList = (input: unknown, kind: "publishes" | "subscribes") => {
+    if (input === undefined) return [];
+    if (!Array.isArray(input)) throw new Error(`events.${kind} must be an array.`);
+    const seen = new Set<string>();
+    return input.map((item, index) => {
+      const id = string(item, `events.${kind}[${index}]`, 64);
+      if (!serviceIdPattern.test(id) || seen.has(id)) throw new Error(`Invalid or duplicate event id: ${id}`);
+      seen.add(id);
+      return id;
+    });
+  };
+
+  return {
+    publishes: parseList(events.publishes, "publishes"),
+    subscribes: parseList(events.subscribes, "subscribes"),
+  };
 }
 
 function parseNavigation(value: unknown, moduleId: string): RuntimeNavigationManifest[] {
@@ -304,6 +367,13 @@ export function parseRuntimeModuleManifest(value: unknown): RuntimeModuleManifes
   if (manifest.sdkVersion !== 2
     && manifest.sdkVersion !== 3
     && manifest.sdkVersion !== 4
+    && manifest.sdkVersion !== 5
+    && manifest.sdkVersion !== 6
+    && manifest.sdkVersion !== 7
+    && manifest.sdkVersion !== 8
+    && manifest.sdkVersion !== 9
+    && manifest.sdkVersion !== 10
+    && manifest.sdkVersion !== 11
     && manifest.sdkVersion !== RUNTIME_MODULE_SDK_VERSION) {
     throw new Error("Unsupported module SDK version.");
   }
@@ -317,7 +387,17 @@ export function parseRuntimeModuleManifest(value: unknown): RuntimeModuleManifes
   if (sdkVersion < 5 && nativeCapabilities?.moduleRepository) {
     throw new Error("Module repository access requires Host SDK V5.");
   }
+  if (sdkVersion < 8 && nativeCapabilities?.notifications) {
+    throw new Error("Module notifications require Host SDK V8.");
+  }
+  if (sdkVersion < 10 && nativeCapabilities?.clipboard) {
+    throw new Error("Module clipboard access requires Host SDK V10.");
+  }
+  if (sdkVersion < 12 && nativeCapabilities?.http) {
+    throw new Error("Module http proxy requires Host SDK V12.");
+  }
   const services = parseServices(manifest.services, sdkVersion);
+  const events = parseEvents(manifest.events, sdkVersion);
 
   const entry = string(manifest.entry, "module entry", 100);
   if (entry !== "index.js") throw new Error("Runtime module entry must be index.js.");
@@ -333,6 +413,7 @@ export function parseRuntimeModuleManifest(value: unknown): RuntimeModuleManifes
     entry,
     dependencies: parseDependencies(manifest.dependencies, id),
     services,
+    events,
     navigation: parseNavigation(manifest.navigation ?? [], id),
     settings: parseSettings(manifest.settings ?? []),
     nativeCapabilities,

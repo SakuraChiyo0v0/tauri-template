@@ -30,6 +30,22 @@ type ModuleStates = BTreeMap<String, RuntimeModuleState>;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
+struct BatchInstallTransaction {
+    baseline_generation: u64,
+    committed: bool,
+    entries: Vec<BatchInstallTransactionEntry>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct BatchInstallTransactionEntry {
+    module_id: String,
+    version: String,
+    previous_state: Option<RuntimeModuleState>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct ModuleVersionRecord {
     pub sha256: String,
 }
@@ -149,6 +165,7 @@ impl ModuleStore {
         &self,
         legacy_disabled_module_ids: &[String],
     ) -> Result<RuntimeModulePlanSnapshot, String> {
+        self.recover_batch_transaction()?;
         self.cleanup_staging()?;
         let (catalog, states) = self.catalog_and_states()?;
         let plan = self.load_or_migrate_plan(&catalog, &states, legacy_disabled_module_ids)?;
@@ -275,6 +292,17 @@ impl ModuleStore {
                 PermissionDecision::AwaitingApproval => PermissionStatus::AwaitingApproval,
             },
         )
+    }
+
+    pub(crate) fn repository_permission_waiting(
+        &self,
+        manifest: &RuntimeModuleManifest,
+    ) -> Result<bool, String> {
+        Ok(self.permission_status(manifest)? == PermissionStatus::AwaitingApproval)
+    }
+
+    pub(crate) fn repository_planning_catalog(&self) -> Result<ModuleCatalog, String> {
+        self.catalog_and_states().map(|(catalog, _)| catalog)
     }
 
     fn eligible_catalog(&self, catalog: &ModuleCatalog) -> Result<ModuleCatalog, String> {
@@ -544,6 +572,97 @@ impl ModuleStore {
             plan,
             modules,
         })
+    }
+
+    pub fn install_batch_with_plan(
+        &self,
+        package_paths: &[PathBuf],
+        target_module_id: &str,
+        target_version: &str,
+        baseline_generation: u64,
+    ) -> Result<RuntimeModuleOperationResult, String> {
+        let snapshot = self.snapshot(&[])?;
+        if snapshot.plan.generation != baseline_generation {
+            return Err("stale_plan".into());
+        }
+        let mut validated = Vec::new();
+        let mut seen = BTreeSet::new();
+        for path in package_paths {
+            let package = self.read_validated_package(path)?;
+            let key = (
+                package.manifest.id.clone(),
+                package.manifest.version.clone(),
+            );
+            if !seen.insert(key.clone()) {
+                return Err(format!(
+                    "duplicate module version in install plan: {} {}",
+                    key.0, key.1
+                ));
+            }
+            if self.version_dir(&key.0, &key.1).exists() {
+                return Err(format!("module version {} is already installed", key.1));
+            }
+            validated.push((path.clone(), package.manifest));
+        }
+        if !validated.iter().any(|(_, manifest)| {
+            manifest.id == target_module_id && manifest.version == target_version
+        }) {
+            return Err("target package is missing from install plan".into());
+        }
+
+        let entries = validated
+            .iter()
+            .map(|(_, manifest)| {
+                let state_path = self.module_dir(&manifest.id).join("state.json");
+                let previous_state = state_path
+                    .exists()
+                    .then(|| read_state(&state_path))
+                    .transpose()?;
+                Ok(BatchInstallTransactionEntry {
+                    module_id: manifest.id.clone(),
+                    version: manifest.version.clone(),
+                    previous_state,
+                })
+            })
+            .collect::<Result<Vec<_>, String>>()?;
+        let mut transaction = BatchInstallTransaction {
+            baseline_generation,
+            committed: false,
+            entries,
+        };
+        self.write_batch_transaction(&transaction)?;
+
+        let result = (|| {
+            for (path, _) in &validated {
+                self.save_package(path)?;
+            }
+            let mut desired_enabled = snapshot.plan.desired_enabled.clone();
+            for (_, manifest) in &validated {
+                desired_enabled.insert(manifest.id.clone(), true);
+            }
+            let (plan, plan_changed) = self.resolve_and_commit(
+                desired_enabled,
+                Some((target_module_id.to_owned(), target_version.to_owned())),
+                &snapshot.plan,
+            )?;
+            transaction.committed = true;
+            self.write_batch_transaction(&transaction)?;
+            self.remove_batch_transaction()?;
+            let modules = self.snapshot(&[])?.modules;
+            Ok(RuntimeModuleOperationResult {
+                module_id: target_module_id.into(),
+                package_installed: true,
+                plan_changed,
+                plan,
+                modules,
+            })
+        })();
+
+        if result.is_err() {
+            let _ = self.rollback_batch_transaction(&transaction);
+            let _ = self.remove_batch_transaction();
+        }
+        result
     }
 
     pub fn approve_native_permissions(
@@ -1013,6 +1132,90 @@ impl ModuleStore {
         let staging = self.root.join(".staging");
         if staging.exists() {
             fs::remove_dir_all(&staging).map_err(io_error("clean module staging directory"))?;
+        }
+        Ok(())
+    }
+
+    fn batch_transaction_path(&self) -> PathBuf {
+        self.root.join(".batch-install-transaction.json")
+    }
+
+    fn write_batch_transaction(&self, transaction: &BatchInstallTransaction) -> Result<(), String> {
+        fs::create_dir_all(&self.root).map_err(io_error("create module directory"))?;
+        let mut temporary = NamedTempFile::new_in(&self.root)
+            .map_err(io_error("create temporary batch transaction"))?;
+        serde_json::to_writer_pretty(&mut temporary, transaction)
+            .map_err(|error| format!("serialize batch transaction: {error}"))?;
+        temporary
+            .flush()
+            .map_err(io_error("flush batch transaction"))?;
+        temporary
+            .persist(self.batch_transaction_path())
+            .map_err(|error| format!("persist batch transaction: {}", error.error))?;
+        Ok(())
+    }
+
+    fn remove_batch_transaction(&self) -> Result<(), String> {
+        let path = self.batch_transaction_path();
+        if path.exists() {
+            fs::remove_file(path).map_err(io_error("remove batch transaction"))?;
+        }
+        Ok(())
+    }
+
+    fn recover_batch_transaction(&self) -> Result<(), String> {
+        let path = self.batch_transaction_path();
+        if !path.exists() {
+            return Ok(());
+        }
+        let transaction: BatchInstallTransaction =
+            serde_json::from_slice(&fs::read(&path).map_err(io_error("read batch transaction"))?)
+                .map_err(|error| format!("invalid batch transaction: {error}"))?;
+        if !transaction.committed {
+            self.rollback_batch_transaction(&transaction)?;
+        }
+        self.remove_batch_transaction()?;
+        Ok(())
+    }
+
+    fn rollback_batch_transaction(
+        &self,
+        transaction: &BatchInstallTransaction,
+    ) -> Result<(), String> {
+        for entry in transaction.entries.iter().rev() {
+            let version_dir = self.version_dir(&entry.module_id, &entry.version);
+            if version_dir.exists() {
+                fs::remove_dir_all(&version_dir)
+                    .map_err(io_error("rollback batch module version"))?;
+            }
+            let module_dir = self.module_dir(&entry.module_id);
+            if let Some(previous_state) = &entry.previous_state {
+                write_state(&module_dir, previous_state)?;
+            } else {
+                let state_path = module_dir.join("state.json");
+                if state_path.exists() {
+                    fs::remove_file(state_path).map_err(io_error("rollback batch module state"))?;
+                }
+                let versions_dir = module_dir.join("versions");
+                if versions_dir.exists()
+                    && fs::read_dir(&versions_dir)
+                        .map_err(io_error("inspect rolled back versions directory"))?
+                        .next()
+                        .is_none()
+                {
+                    fs::remove_dir(versions_dir)
+                        .map_err(io_error("remove empty versions directory"))?;
+                }
+                if module_dir.exists()
+                    && fs::read_dir(&module_dir)
+                        .map_err(io_error("inspect rolled back module directory"))?
+                        .next()
+                        .is_none()
+                {
+                    fs::remove_dir(module_dir)
+                        .map_err(io_error("remove empty module directory"))?;
+                }
+            }
         }
         Ok(())
     }
@@ -2016,6 +2219,67 @@ mod tests {
 
         store.uninstall("hello-module").unwrap();
         assert!(store.list().unwrap().is_empty());
+    }
+
+    #[test]
+    fn recovers_uncommitted_batch_versions_and_keeps_committed_batches() {
+        let temp = tempfile::tempdir().unwrap();
+        let module_store = store(temp.path());
+        let baseline = module_store.snapshot(&[]).unwrap().plan.generation;
+        let alpha = package_for(temp.path(), "alpha", "alpha-module", "1.0.0", &[]);
+        let transaction = BatchInstallTransaction {
+            baseline_generation: baseline,
+            committed: false,
+            entries: vec![BatchInstallTransactionEntry {
+                module_id: "alpha-module".into(),
+                version: "1.0.0".into(),
+                previous_state: None,
+            }],
+        };
+        module_store.write_batch_transaction(&transaction).unwrap();
+        module_store.save_package(&alpha).unwrap();
+
+        let restarted = store(temp.path());
+        assert!(restarted.snapshot(&[]).unwrap().modules.is_empty());
+        assert!(!restarted.module_dir("alpha-module").exists());
+
+        let beta = package_for(temp.path(), "beta", "beta-module", "1.0.0", &[]);
+        let mut committed = BatchInstallTransaction {
+            baseline_generation: restarted.snapshot(&[]).unwrap().plan.generation,
+            committed: false,
+            entries: vec![BatchInstallTransactionEntry {
+                module_id: "beta-module".into(),
+                version: "1.0.0".into(),
+                previous_state: None,
+            }],
+        };
+        restarted.write_batch_transaction(&committed).unwrap();
+        restarted.save_package(&beta).unwrap();
+        committed.committed = true;
+        restarted.write_batch_transaction(&committed).unwrap();
+
+        let restarted = store(temp.path());
+        assert_eq!(
+            restarted.snapshot(&[]).unwrap().modules[0].manifest.id,
+            "beta-module"
+        );
+        assert!(!restarted.batch_transaction_path().exists());
+    }
+
+    #[test]
+    fn batch_prevalidation_failure_does_not_install_an_earlier_package() {
+        let temp = tempfile::tempdir().unwrap();
+        let store = store(temp.path());
+        let baseline = store.snapshot(&[]).unwrap().plan.generation;
+        let valid = package_for(temp.path(), "valid", "valid-module", "1.0.0", &[]);
+        let invalid = temp.path().join("invalid.mtp");
+        fs::write(&invalid, b"not a package").unwrap();
+        assert!(
+            store
+                .install_batch_with_plan(&[valid, invalid], "valid-module", "1.0.0", baseline,)
+                .is_err()
+        );
+        assert!(store.snapshot(&[]).unwrap().modules.is_empty());
     }
 
     #[test]

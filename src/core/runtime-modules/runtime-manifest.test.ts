@@ -110,12 +110,59 @@ describe("runtime module manifest", () => {
     });
   });
 
+  it("accepts Host SDK V6 while keeping module repository permissions explicit", () => {
+    expect(parseRuntimeModuleManifest({
+      ...validManifest,
+      sdkVersion: 6,
+      services: { provides: [] },
+      nativeCapabilities: {
+        filesystem: { private: false, external: ["read", "list"] },
+        process: null,
+        registry: [],
+        tray: [],
+        shortcuts: [],
+        moduleRepository: { install: true },
+      },
+    })).toMatchObject({
+      sdkVersion: 6,
+      nativeCapabilities: { moduleRepository: { install: true } },
+    });
+  });
+
   it("rejects module repository access before Host SDK V5", () => {
     expect(() => parseRuntimeModuleManifest({
       ...validManifest,
       sdkVersion: 4,
       nativeCapabilities: { moduleRepository: { install: true } },
     })).toThrow(/Host SDK V5/i);
+  });
+
+  it("accepts Host SDK V7 with declared events", () => {
+    expect(parseRuntimeModuleManifest({
+      ...validManifest,
+      sdkVersion: 7,
+      events: { publishes: ["notes.changed.v1"], subscribes: ["notes.changed.v1", "market.updated.v1"] },
+    })).toMatchObject({
+      sdkVersion: 7,
+      events: { publishes: ["notes.changed.v1"], subscribes: ["notes.changed.v1", "market.updated.v1"] },
+    });
+  });
+
+  it("defaults to empty event declarations when omitted", () => {
+    expect(parseRuntimeModuleManifest({ ...validManifest, sdkVersion: 7 })).toMatchObject({
+      sdkVersion: 7,
+      events: { publishes: [], subscribes: [] },
+    });
+  });
+
+  it.each([
+    { name: "events on SDK V6", sdkVersion: 6, events: { publishes: ["notes.changed.v1"] } },
+    { name: "duplicate published event", sdkVersion: 7, events: { publishes: ["notes.changed.v1", "notes.changed.v1"] } },
+    { name: "duplicate subscribed event", sdkVersion: 7, events: { subscribes: ["notes.changed.v1", "notes.changed.v1"] } },
+    { name: "invalid event id", sdkVersion: 7, events: { subscribes: ["Invalid Event"] } },
+    { name: "unknown events key", sdkVersion: 7, events: { streams: ["notes.changed.v1"] } },
+  ])("rejects $name", ({ sdkVersion, events }) => {
+    expect(() => parseRuntimeModuleManifest({ ...validManifest, sdkVersion, events })).toThrow(/event/i);
   });
 
   it.each([
@@ -131,6 +178,139 @@ describe("runtime module manifest", () => {
       ...validManifest,
       nativeCapabilities: { filesystem: { private: true, external: [] } },
     })).toThrow(/native capabilities/i);
+  });
+
+  it("accepts Host SDK V8 with declared notifications capability", () => {
+    expect(parseRuntimeModuleManifest({
+      ...validManifest,
+      sdkVersion: 8,
+      services: { provides: [] },
+      events: { publishes: [], subscribes: [] },
+      nativeCapabilities: {
+        filesystem: null,
+        process: null,
+        registry: [],
+        tray: [],
+        shortcuts: [],
+        notifications: { system: true },
+      },
+    })).toMatchObject({
+      sdkVersion: 8,
+      nativeCapabilities: { notifications: { system: true } },
+    });
+  });
+
+  it("accepts Host SDK V9 without requiring new native capabilities", () => {
+    expect(parseRuntimeModuleManifest({
+      ...validManifest,
+      sdkVersion: 9,
+      services: { provides: [] },
+      events: { publishes: [], subscribes: [] },
+      nativeCapabilities: {
+        filesystem: null,
+        process: null,
+        registry: [],
+        tray: [],
+        shortcuts: [],
+        notifications: { system: true },
+      },
+    })).toMatchObject({ sdkVersion: 9 });
+  });
+
+  it("accepts Host SDK V11", () => {
+    expect(parseRuntimeModuleManifest({
+      ...validManifest,
+      sdkVersion: 11,
+      services: { provides: [] },
+      events: { publishes: [], subscribes: [] },
+      nativeCapabilities: {
+        filesystem: null,
+        process: null,
+        registry: [],
+        tray: [],
+        shortcuts: [],
+        notifications: { system: true },
+        clipboard: { text: true },
+      },
+    })).toMatchObject({ sdkVersion: 11 });
+  });
+
+  it("accepts Host SDK V12 with http capability", () => {
+    expect(parseRuntimeModuleManifest({
+      ...validManifest,
+      sdkVersion: 12,
+      services: { provides: [] },
+      events: { publishes: [], subscribes: [] },
+      nativeCapabilities: {
+        filesystem: null,
+        process: null,
+        registry: [],
+        tray: [],
+        shortcuts: [],
+        notifications: { system: true },
+        clipboard: { text: true },
+        http: { origins: ["https://api.example.com"] },
+      },
+    })).toMatchObject({ sdkVersion: 12, nativeCapabilities: { http: { origins: ["https://api.example.com"] } } });
+  });
+
+  it.each([
+    { name: "http on SDK V11", sdkVersion: 11, nativeCapabilities: { http: { origins: ["https://api.example.com"] } } },
+    { name: "non-https http origin", sdkVersion: 12, nativeCapabilities: { http: { origins: ["http://api.example.com"] } } },
+    { name: "duplicate http origin", sdkVersion: 12, nativeCapabilities: { http: { origins: ["https://a.example.com", "https://a.example.com"] } } },
+  ])("rejects $name", ({ sdkVersion, nativeCapabilities }) => {
+    expect(() => parseRuntimeModuleManifest({
+      ...validManifest,
+      sdkVersion,
+      services: { provides: [] },
+      events: { publishes: [], subscribes: [] },
+      nativeCapabilities: { filesystem: null, process: null, registry: [], tray: [], shortcuts: [], notifications: { system: true }, clipboard: { text: true }, ...nativeCapabilities },
+    })).toThrow(/http|SDK V12/i);
+  });
+
+  it("accepts Host SDK V10 with clipboard capability", () => {
+    expect(parseRuntimeModuleManifest({
+      ...validManifest,
+      sdkVersion: 10,
+      services: { provides: [] },
+      events: { publishes: [], subscribes: [] },
+      nativeCapabilities: {
+        filesystem: null,
+        process: null,
+        registry: [],
+        tray: [],
+        shortcuts: [],
+        notifications: { system: true },
+        clipboard: { text: true },
+      },
+    })).toMatchObject({ sdkVersion: 10, nativeCapabilities: { clipboard: { text: true } } });
+  });
+
+  it.each([
+    { name: "clipboard on SDK V9", sdkVersion: 9, nativeCapabilities: { clipboard: { text: true } } },
+    { name: "invalid clipboard flag", sdkVersion: 10, nativeCapabilities: { clipboard: { text: false } } },
+  ])("rejects $name", ({ sdkVersion, nativeCapabilities }) => {
+    expect(() => parseRuntimeModuleManifest({
+      ...validManifest,
+      sdkVersion,
+      services: { provides: [] },
+      events: { publishes: [], subscribes: [] },
+      nativeCapabilities: { filesystem: null, process: null, registry: [], tray: [], shortcuts: [], notifications: { system: true }, ...nativeCapabilities },
+    })).toThrow(/clipboard|SDK V10/i);
+  });
+
+  it.each([
+    { name: "notifications on SDK V7", sdkVersion: 7, nativeCapabilities: { notifications: { system: true } } },
+    { name: "invalid notifications flag", sdkVersion: 8, nativeCapabilities: { notifications: { system: false } } },
+    { name: "unknown notifications key", sdkVersion: 8, nativeCapabilities: { notifications: { sound: true } } },
+  ])("rejects $name", ({ sdkVersion, nativeCapabilities }) => {
+    expect(() => parseRuntimeModuleManifest({
+      ...validManifest,
+      sdkVersion,
+      services: { provides: [] },
+      events: { publishes: [], subscribes: [] },
+      nativeCapabilities: { filesystem: null, process: null, registry: [], tray: [], shortcuts: [], ...nativeCapabilities },
+    })).toThrow(/notifications|SDK V8/i);
   });
 
   it("preserves required and optional dependency ranges", () => {
