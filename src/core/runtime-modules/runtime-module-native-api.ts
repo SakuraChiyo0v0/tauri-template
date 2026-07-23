@@ -35,6 +35,14 @@ export const runtimeModuleNativeApi: RuntimeModuleNativeBackend = {
   createModuleRepositoryGrant: (sessionToken, path) => call("create_runtime_module_repository_grant", { sessionToken, path }),
   scanModuleRepository: (sessionToken, grantId) => call("scan_runtime_module_repository", { sessionToken, grantId }),
   installModuleFromRepository: (sessionToken, grantId, fileName) => call("install_runtime_module_from_repository", { sessionToken, grantId, fileName }),
+  previewModuleRepositoryInstall: (sessionToken, grantId, fileName) => call("preview_runtime_module_repository_install", { sessionToken, grantId, fileName }),
+  executeModuleRepositoryInstallPlan: (sessionToken, grantId, planId) => call("execute_runtime_module_repository_install_plan", { sessionToken, grantId, planId }),
+  showNotification: (sessionToken, notification) => call("show_runtime_module_notification", { sessionToken, notification }),
+  exportModuleBackup: (sessionToken, settingsJson, targetPath) => call("export_runtime_module_data_backup", { sessionToken, settingsJson, targetPath }),
+  importModuleBackup: (sessionToken, sourcePath) => call("import_runtime_module_data_backup", { sessionToken, sourcePath }),
+  readClipboard: (sessionToken) => call("read_runtime_module_clipboard", { sessionToken }),
+  writeClipboard: (sessionToken, text) => call("write_runtime_module_clipboard", { sessionToken, text }),
+  fetchHttp: (sessionToken, request) => call("fetch_runtime_module_http", { sessionToken, request }),
   onTrayAction: (moduleId, listener) => listen<{ moduleId: string; itemId: string }>("runtime-module-tray", (event) => {
     if (event.payload.moduleId === moduleId) listener(event.payload.itemId);
   }),

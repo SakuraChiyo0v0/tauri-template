@@ -27,4 +27,28 @@ describe("runtime module native bridge", () => {
       grantId: "selected-file",
     });
   });
+
+  it("passes only opaque repository grant and plan identifiers to V6 commands", async () => {
+    await runtimeModuleNativeApi.previewModuleRepositoryInstall(
+      "session-token",
+      "repository-grant",
+      "target.mtp",
+    );
+    await runtimeModuleNativeApi.executeModuleRepositoryInstallPlan(
+      "session-token",
+      "repository-grant",
+      "plan-token",
+    );
+
+    expect(invoke).toHaveBeenNthCalledWith(1, "preview_runtime_module_repository_install", {
+      sessionToken: "session-token",
+      grantId: "repository-grant",
+      fileName: "target.mtp",
+    });
+    expect(invoke).toHaveBeenNthCalledWith(2, "execute_runtime_module_repository_install_plan", {
+      sessionToken: "session-token",
+      grantId: "repository-grant",
+      planId: "plan-token",
+    });
+  });
 });

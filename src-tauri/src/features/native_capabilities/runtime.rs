@@ -9,9 +9,12 @@ use tauri::{
 use tauri_plugin_global_shortcut::{GlobalShortcutExt, ShortcutState as SystemShortcutState};
 
 use super::{
+    clipboard,
     filesystem::{
         DirectoryEntry, FileGrant, FileGrantSummary, FilesystemManager, GrantAccess, GrantKind,
     },
+    http_proxy::{HttpProxyResult, ModuleHttpRequest, execute_request},
+    notifications::{ModuleNotification, NotificationSendResult, send_notification},
     permissions::{
         ExternalFileAccess, NativeCapabilityKind, PermissionDecision, PermissionStore,
         RegistryHive, TrayItemKind,
@@ -28,7 +31,9 @@ use super::{
 use crate::features::runtime_modules::{
     module_store,
     repository::{
-        RepositoryInstallResult, RepositoryPackage, install_repository_package, scan_repository,
+        RepositoryInstallPlan, RepositoryInstallPlanResult, RepositoryInstallResult,
+        RepositoryPackage, RepositoryPlanRegistry, execute_repository_plan,
+        install_repository_package, preview_repository_install, scan_repository,
     },
 };
 
@@ -41,6 +46,7 @@ pub struct NativeRuntimeState {
     shortcuts: ShortcutRegistry,
     registered_shortcuts: Mutex<BTreeMap<String, String>>,
     locale: Mutex<String>,
+    repository_plans: RepositoryPlanRegistry,
 }
 
 impl NativeRuntimeState {
@@ -59,6 +65,7 @@ impl NativeRuntimeState {
             shortcuts: ShortcutRegistry::new(app_data.join("native-shortcuts.json")),
             registered_shortcuts: Mutex::new(BTreeMap::new()),
             locale: Mutex::new("zh-CN".into()),
+            repository_plans: RepositoryPlanRegistry::default(),
         }
     }
 
@@ -83,6 +90,7 @@ impl NativeRuntimeState {
 
     pub fn release(&self, token: &str) -> Result<(), String> {
         let session = self.sessions.get(token)?;
+        self.repository_plans.revoke_session(token);
         self.processes.cancel_session(token);
         self.tray.deactivate_module(&session.module_id);
         self.deactivate_shortcuts(&session.module_id);
@@ -92,6 +100,7 @@ impl NativeRuntimeState {
     }
 
     pub fn release_module(&self, module_id: &str) {
+        self.repository_plans.revoke_module(module_id);
         for token in self.sessions.revoke_module(module_id) {
             self.processes.cancel_session(&token);
         }
@@ -676,6 +685,47 @@ pub fn install_runtime_module_from_repository(
 }
 
 #[tauri::command]
+pub fn preview_runtime_module_repository_install(
+    state: State<'_, NativeRuntimeState>,
+    session_token: String,
+    grant_id: String,
+    file_name: String,
+) -> Result<RepositoryInstallPlan, String> {
+    let session = repository_session(&state, &session_token)?;
+    let repository = state
+        .filesystem
+        .resolve_readable_directory(&session.module_id, &grant_id)?;
+    let prepared = preview_repository_install(&module_store(&state.app)?, &repository, &file_name)?;
+    state
+        .repository_plans
+        .insert(&session_token, &session.module_id, &grant_id, prepared)
+}
+
+#[tauri::command]
+pub fn execute_runtime_module_repository_install_plan(
+    state: State<'_, NativeRuntimeState>,
+    session_token: String,
+    grant_id: String,
+    plan_id: String,
+) -> Result<RepositoryInstallPlanResult, String> {
+    let session = repository_session(&state, &session_token)?;
+    let repository = state
+        .filesystem
+        .resolve_readable_directory(&session.module_id, &grant_id)?;
+    let prepared =
+        state
+            .repository_plans
+            .consume(&session_token, &session.module_id, &grant_id, &plan_id)?;
+    let result = execute_repository_plan(&module_store(&state.app)?, &repository, &prepared)?;
+    if result.plan_changed {
+        for module in &result.modules {
+            state.release_module(&module.module_id);
+        }
+    }
+    Ok(result)
+}
+
+#[tauri::command]
 pub fn revoke_runtime_module_file_grant(
     state: State<'_, NativeRuntimeState>,
     session_token: String,
@@ -842,4 +892,52 @@ pub fn disable_runtime_module_session_shortcut(
 ) -> Result<Vec<ShortcutStatus>, String> {
     let session = state.session(&session_token, NativeCapabilityKind::Shortcuts)?;
     state.disable_admin_shortcut(&session.module_id, &shortcut_id)
+}
+
+#[tauri::command]
+pub fn show_runtime_module_notification(
+    app: AppHandle,
+    state: State<'_, NativeRuntimeState>,
+    session_token: String,
+    notification: ModuleNotification,
+) -> Result<NotificationSendResult, String> {
+    let session = state.session(&session_token, NativeCapabilityKind::Notifications)?;
+    send_notification(&app, &session.module_id, notification)
+}
+
+#[tauri::command]
+pub fn read_runtime_module_clipboard(
+    app: AppHandle,
+    state: State<'_, NativeRuntimeState>,
+    session_token: String,
+) -> Result<String, String> {
+    let session = state.session(&session_token, NativeCapabilityKind::Clipboard)?;
+    clipboard::read_text(&app)
+}
+
+#[tauri::command]
+pub fn write_runtime_module_clipboard(
+    app: AppHandle,
+    state: State<'_, NativeRuntimeState>,
+    session_token: String,
+    text: String,
+) -> Result<(), String> {
+    let session = state.session(&session_token, NativeCapabilityKind::Clipboard)?;
+    clipboard::write_text(&app, &text)
+}
+
+#[tauri::command]
+pub fn fetch_runtime_module_http(
+    _app: AppHandle,
+    state: State<'_, NativeRuntimeState>,
+    session_token: String,
+    request: ModuleHttpRequest,
+) -> Result<HttpProxyResult, String> {
+    let session = state.session(&session_token, NativeCapabilityKind::Http)?;
+    let http = session
+        .permissions
+        .http
+        .as_ref()
+        .ok_or("module http capability is not approved")?;
+    execute_request(&session.module_id, &http.origins, request)
 }

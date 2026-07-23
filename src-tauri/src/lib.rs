@@ -9,6 +9,8 @@ pub fn run() {
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_global_shortcut::Builder::new().build())
+        .plugin(tauri_plugin_notification::init())
+        .plugin(tauri_plugin_clipboard_manager::init())
         .setup(|app| {
             let app_data = app
                 .path()
@@ -40,6 +42,8 @@ pub fn run() {
             features::runtime_modules::set_runtime_module_database_user_version,
             features::runtime_modules::list_runtime_module_data,
             features::runtime_modules::clear_runtime_module_data,
+            features::runtime_modules::export_runtime_module_data_backup,
+            features::runtime_modules::import_runtime_module_data_backup,
             features::native_capabilities::runtime::create_runtime_module_native_session,
             features::native_capabilities::runtime::release_runtime_module_native_session,
             features::native_capabilities::runtime::read_runtime_module_private_file,
@@ -51,6 +55,8 @@ pub fn run() {
             features::native_capabilities::runtime::create_runtime_module_repository_grant,
             features::native_capabilities::runtime::scan_runtime_module_repository,
             features::native_capabilities::runtime::install_runtime_module_from_repository,
+            features::native_capabilities::runtime::preview_runtime_module_repository_install,
+            features::native_capabilities::runtime::execute_runtime_module_repository_install_plan,
             features::native_capabilities::runtime::revoke_runtime_module_file_grant,
             features::native_capabilities::runtime::open_runtime_module_url,
             features::native_capabilities::runtime::open_runtime_module_granted_file,
@@ -69,6 +75,10 @@ pub fn run() {
             features::native_capabilities::runtime::list_runtime_module_shortcut_statuses,
             features::native_capabilities::runtime::rebind_runtime_module_shortcut,
             features::native_capabilities::runtime::disable_runtime_module_shortcut,
+            features::native_capabilities::runtime::show_runtime_module_notification,
+            features::native_capabilities::runtime::read_runtime_module_clipboard,
+            features::native_capabilities::runtime::write_runtime_module_clipboard,
+            features::native_capabilities::runtime::fetch_runtime_module_http,
             features::native_capabilities::runtime::set_application_locale,
         ])
         .run(tauri::generate_context!())

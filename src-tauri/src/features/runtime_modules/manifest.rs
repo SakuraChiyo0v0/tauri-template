@@ -9,7 +9,11 @@ use crate::features::native_capabilities::permissions::{
 
 pub const SCHEMA_VERSION: u32 = 2;
 pub const MIN_SDK_VERSION: u32 = 2;
-pub const MAX_SDK_VERSION: u32 = 5;
+pub const MAX_SDK_VERSION: u32 = 12;
+
+pub fn supports_database_api(sdk_version: u32) -> bool {
+    (MIN_SDK_VERSION..=MAX_SDK_VERSION).contains(&sdk_version)
+}
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, PartialOrd, Ord)]
 #[serde(deny_unknown_fields)]
@@ -42,6 +46,8 @@ pub struct RuntimeModuleManifest {
     #[serde(default)]
     pub services: RuntimeModuleServices,
     #[serde(default)]
+    pub events: RuntimeModuleEvents,
+    #[serde(default)]
     pub navigation: Vec<RuntimeNavigationManifest>,
     #[serde(default)]
     pub settings: Vec<RuntimeSettingManifest>,
@@ -67,6 +73,14 @@ pub struct RuntimeModuleDependency {
 pub struct RuntimeModuleServices {
     #[serde(default)]
     pub provides: Vec<String>,
+}
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq)]
+pub struct RuntimeModuleEvents {
+    #[serde(default)]
+    pub publishes: Vec<String>,
+    #[serde(default)]
+    pub subscribes: Vec<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -160,6 +174,15 @@ impl RuntimeModuleManifest {
         if self.sdk_version < 5 && self.native_capabilities.module_repository.is_some() {
             return Err("module repository access requires Host SDK V5".into());
         }
+        if self.sdk_version < 8 && self.native_capabilities.notifications.is_some() {
+            return Err("module notifications require Host SDK V8".into());
+        }
+        if self.sdk_version < 10 && self.native_capabilities.clipboard.is_some() {
+            return Err("module clipboard access requires Host SDK V10".into());
+        }
+        if self.sdk_version < 12 && self.native_capabilities.http.is_some() {
+            return Err("module http proxy requires Host SDK V12".into());
+        }
         self.native_capabilities.normalize()?;
 
         let mut dependency_ids = HashSet::new();
@@ -194,6 +217,24 @@ impl RuntimeModuleManifest {
         for service_id in &self.services.provides {
             if !is_service_id(service_id) || !service_ids.insert(service_id) {
                 return Err(format!("invalid or duplicate service id: {service_id}"));
+            }
+        }
+
+        if self.sdk_version < 7
+            && (!self.events.publishes.is_empty() || !self.events.subscribes.is_empty())
+        {
+            return Err("module events require Host SDK V7".into());
+        }
+        let mut published_event_ids = HashSet::new();
+        for event_id in &self.events.publishes {
+            if !is_service_id(event_id) || !published_event_ids.insert(event_id) {
+                return Err(format!("invalid or duplicate event id: {event_id}"));
+            }
+        }
+        let mut subscribed_event_ids = HashSet::new();
+        for event_id in &self.events.subscribes {
+            if !is_service_id(event_id) || !subscribed_event_ids.insert(event_id) {
+                return Err(format!("invalid or duplicate event id: {event_id}"));
             }
         }
 
@@ -341,6 +382,7 @@ mod tests {
             entry: "index.js".into(),
             dependencies: RuntimeModuleDependencies::default(),
             services: RuntimeModuleServices::default(),
+            events: RuntimeModuleEvents::default(),
             navigation: vec![RuntimeNavigationManifest {
                 id: "hello-home".into(),
                 title: text("问候", "Hello"),
@@ -370,17 +412,15 @@ mod tests {
     }
 
     #[test]
-    fn accepts_sdk_v2_through_v5_but_rejects_other_versions() {
+    fn accepts_sdk_v2_through_v12_but_rejects_other_versions() {
         let mut value = manifest();
-        value.sdk_version = 3;
-        assert!(value.validate(&Version::new(0, 1, 0)).is_ok());
-        value.sdk_version = 4;
-        assert!(value.validate(&Version::new(0, 1, 0)).is_ok());
-        value.sdk_version = 5;
-        assert!(value.validate(&Version::new(0, 1, 0)).is_ok());
+        for version in 3..=12 {
+            value.sdk_version = version;
+            assert!(value.validate(&Version::new(0, 1, 0)).is_ok(), "SDK {version} should be valid");
+        }
         value.sdk_version = 1;
         assert!(value.validate(&Version::new(0, 1, 0)).is_err());
-        value.sdk_version = 6;
+        value.sdk_version = 13;
         assert!(
             value
                 .validate(&Version::new(0, 1, 0))
@@ -406,6 +446,14 @@ mod tests {
         )
         .unwrap();
         assert!(parsed.native_capabilities.module_repository.is_some());
+
+        value["sdkVersion"] = serde_json::json!(6);
+        let parsed = RuntimeModuleManifest::parse_and_validate(
+            &serde_json::to_vec(&value).unwrap(),
+            &Version::new(0, 1, 0),
+        )
+        .unwrap();
+        assert_eq!(parsed.sdk_version, 6);
 
         value["sdkVersion"] = serde_json::json!(4);
         assert!(
@@ -600,5 +648,74 @@ mod tests {
                 .unwrap_err()
                 .contains("module id")
         );
+    }
+
+    #[test]
+    fn accepts_sdk_v7_with_declared_events() {
+        let mut value = serde_json::to_value(manifest()).unwrap();
+        value["sdkVersion"] = serde_json::json!(7);
+        value["events"] = serde_json::json!({
+            "publishes": ["notes.changed.v1"],
+            "subscribes": ["notes.changed.v1", "market.updated.v1"]
+        });
+        let parsed = RuntimeModuleManifest::parse_and_validate(
+            &serde_json::to_vec(&value).unwrap(),
+            &Version::new(0, 1, 0),
+        )
+        .unwrap();
+        assert_eq!(parsed.sdk_version, 7);
+        assert_eq!(parsed.events.publishes, vec!["notes.changed.v1"]);
+        assert_eq!(
+            parsed.events.subscribes,
+            vec!["notes.changed.v1", "market.updated.v1"]
+        );
+    }
+
+    #[test]
+    fn rejects_event_declarations_below_sdk_v7() {
+        let mut value = serde_json::to_value(manifest()).unwrap();
+        value["sdkVersion"] = serde_json::json!(6);
+        value["events"] = serde_json::json!({ "publishes": ["notes.changed.v1"] });
+        assert!(
+            RuntimeModuleManifest::parse_and_validate(
+                &serde_json::to_vec(&value).unwrap(),
+                &Version::new(0, 1, 0),
+            )
+            .unwrap_err()
+            .contains("Host SDK V7")
+        );
+    }
+
+    #[test]
+    fn rejects_duplicate_or_invalid_event_ids() {
+        for events in [
+            serde_json::json!({ "publishes": ["notes.changed.v1", "notes.changed.v1"] }),
+            serde_json::json!({ "subscribes": ["Invalid Event"] }),
+            serde_json::json!({ "subscribes": ["plainword"] }),
+        ] {
+            let mut value = serde_json::to_value(manifest()).unwrap();
+            value["sdkVersion"] = serde_json::json!(7);
+            value["events"] = events.clone();
+            assert!(
+                RuntimeModuleManifest::parse_and_validate(
+                    &serde_json::to_vec(&value).unwrap(),
+                    &Version::new(0, 1, 0),
+                )
+                .unwrap_err()
+                .contains("event id"),
+                "expected event id rejection for {events}"
+            );
+        }
+    }
+
+    #[test]
+    fn supports_database_api_for_every_supported_sdk_version() {
+        for sdk_version in [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13] {
+            assert_eq!(
+                supports_database_api(sdk_version),
+                (2..=12).contains(&sdk_version),
+                "unexpected database support for SDK {sdk_version}"
+            );
+        }
     }
 }

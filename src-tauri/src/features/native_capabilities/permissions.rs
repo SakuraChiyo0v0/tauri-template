@@ -100,6 +100,27 @@ pub struct ModuleRepositoryCapability {
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct NotificationsCapability {
+    #[serde(default)]
+    pub system: bool,
+}
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct ClipboardCapability {
+    #[serde(default)]
+    pub text: bool,
+}
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct HttpCapability {
+    #[serde(default)]
+    pub origins: Vec<String>,
+}
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct NativeCapabilities {
     pub filesystem: Option<FilesystemCapability>,
     pub process: Option<ProcessCapability>,
@@ -110,6 +131,9 @@ pub struct NativeCapabilities {
     #[serde(default)]
     pub shortcuts: Vec<ShortcutDeclaration>,
     pub module_repository: Option<ModuleRepositoryCapability>,
+    pub notifications: Option<NotificationsCapability>,
+    pub clipboard: Option<ClipboardCapability>,
+    pub http: Option<HttpCapability>,
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
@@ -121,6 +145,9 @@ pub struct NormalizedNativeCapabilities {
     pub tray: Vec<TrayItemDeclaration>,
     pub shortcuts: Vec<ShortcutDeclaration>,
     pub module_repository: Option<ModuleRepositoryCapability>,
+    pub notifications: Option<NotificationsCapability>,
+    pub clipboard: Option<ClipboardCapability>,
+    pub http: Option<HttpCapability>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -146,6 +173,9 @@ pub enum NativePermissionSummary {
         count: usize,
     },
     ModuleRepositoryInstall,
+    Notifications,
+    Clipboard,
+    Http { origins: Vec<String> },
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -156,6 +186,9 @@ pub enum NativeCapabilityKind {
     Tray,
     Shortcuts,
     ModuleRepository,
+    Notifications,
+    Clipboard,
+    Http,
 }
 
 impl NativeCapabilities {
@@ -225,6 +258,29 @@ impl NativeCapabilities {
             return Err("module repository capability must request install access".into());
         }
 
+        if let Some(notifications) = &self.notifications
+            && !notifications.system
+        {
+            return Err("notifications capability must request system access".into());
+        }
+
+        if let Some(clipboard) = &self.clipboard
+            && !clipboard.text
+        {
+            return Err("clipboard capability must request text access".into());
+        }
+
+        let http = self.http.clone().map(|mut value| -> Result<HttpCapability, String> {
+            for origin in &mut value.origins {
+                if !origin.starts_with("https://") {
+                    return Err(format!("http origin must be https: {origin}"));
+                }
+            }
+            value.origins.sort();
+            value.origins.dedup();
+            Ok(value)
+        }).transpose()?;
+
         Ok(NormalizedNativeCapabilities {
             filesystem,
             process,
@@ -232,6 +288,9 @@ impl NativeCapabilities {
             tray,
             shortcuts,
             module_repository: self.module_repository.clone(),
+            notifications: self.notifications.clone(),
+            clipboard: self.clipboard.clone(),
+            http,
         })
     }
 }
@@ -293,6 +352,23 @@ impl NormalizedNativeCapabilities {
         if self.module_repository.is_some() {
             result.push(NativePermissionSummary::ModuleRepositoryInstall);
         }
+        if let Some(notifications) = &self.notifications
+            && notifications.system
+        {
+            result.push(NativePermissionSummary::Notifications);
+        }
+        if let Some(clipboard) = &self.clipboard
+            && clipboard.text
+        {
+            result.push(NativePermissionSummary::Clipboard);
+        }
+        if let Some(http) = &self.http
+            && !http.origins.is_empty()
+        {
+            result.push(NativePermissionSummary::Http {
+                origins: http.origins.clone(),
+            });
+        }
         result
     }
 
@@ -304,6 +380,15 @@ impl NormalizedNativeCapabilities {
             NativeCapabilityKind::Tray => !self.tray.is_empty(),
             NativeCapabilityKind::Shortcuts => !self.shortcuts.is_empty(),
             NativeCapabilityKind::ModuleRepository => self.module_repository.is_some(),
+            NativeCapabilityKind::Notifications => self
+                .notifications
+                .as_ref()
+                .is_some_and(|value| value.system),
+            NativeCapabilityKind::Clipboard => self
+                .clipboard
+                .as_ref()
+                .is_some_and(|value| value.text),
+            NativeCapabilityKind::Http => self.http.is_some(),
         }
     }
 
@@ -320,6 +405,45 @@ impl NormalizedNativeCapabilities {
                 .iter()
                 .all(|item| approved.shortcuts.contains(item))
             && (self.module_repository.is_none() || approved.module_repository.is_some())
+            && notifications_subset(self.notifications.as_ref(), approved.notifications.as_ref())
+            && clipboard_subset(self.clipboard.as_ref(), approved.clipboard.as_ref())
+            && http_subset(self.http.as_ref(), approved.http.as_ref())
+    }
+}
+
+fn notifications_subset(
+    requested: Option<&NotificationsCapability>,
+    approved: Option<&NotificationsCapability>,
+) -> bool {
+    match (requested, approved) {
+        (None, _) => true,
+        (Some(_), None) => false,
+        (Some(requested), Some(approved)) => !requested.system || approved.system,
+    }
+}
+
+fn clipboard_subset(
+    requested: Option<&ClipboardCapability>,
+    approved: Option<&ClipboardCapability>,
+) -> bool {
+    match (requested, approved) {
+        (None, _) => true,
+        (Some(_), None) => false,
+        (Some(requested), Some(approved)) => !requested.text || approved.text,
+    }
+}
+
+fn http_subset(
+    requested: Option<&HttpCapability>,
+    approved: Option<&HttpCapability>,
+) -> bool {
+    match (requested, approved) {
+        (None, _) => true,
+        (Some(_), None) => false,
+        (Some(requested), Some(approved)) => requested
+            .origins
+            .iter()
+            .all(|origin| approved.origins.contains(origin)),
     }
 }
 
@@ -576,6 +700,9 @@ mod tests {
                 accelerator: "Ctrl+Shift+M".into(),
             }],
             module_repository: None,
+            notifications: None,
+            clipboard: None,
+            http: None,
         }
     }
 
@@ -670,5 +797,22 @@ mod tests {
         );
         assert!(!requested.is_subset_of(&base));
         assert!(base.is_subset_of(&requested));
+    }
+
+    #[test]
+    fn notifications_capability_changes_fingerprint_and_requires_approval() {
+        let base = capabilities().normalize().unwrap();
+        let mut requested = capabilities();
+        requested.notifications = Some(NotificationsCapability { system: true });
+        let requested = requested.normalize().unwrap();
+
+        assert_ne!(base.fingerprint(), requested.fingerprint());
+        assert!(requested.summary().contains(&NativePermissionSummary::Notifications));
+        assert!(!requested.is_subset_of(&base));
+        assert!(base.is_subset_of(&requested));
+
+        let mut invalid = capabilities();
+        invalid.notifications = Some(NotificationsCapability { system: false });
+        assert!(invalid.normalize().unwrap_err().contains("notifications"));
     }
 }
