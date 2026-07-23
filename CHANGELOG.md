@@ -6,6 +6,36 @@
 
 ### Added
 
+- 新增 Host SDK V12 受限 HTTP 代理能力；模块在清单 `nativeCapabilities.http.origins` 声明允许的 HTTPS 源并经用户批准后，可通过 `sdk.http.fetch({ url, method, headers, body, timeoutMs })` 请求。复用既有 V3 原生能力审批与生命周期清理；只允许清单声明的源与 HTTPS，拒绝私有地址防止 SSRF；请求/响应大小与超时受限，不持久 cookie，不执行响应脚本。基于 `reqwest`。
+- 新增 Host SDK V11 模块模态对话框能力；模块通过 `sdk.dialogs.confirm(options)` / `prompt(options)` 请求由外壳托管的模态确认或文本输入对话框。外壳负责渲染、焦点陷阱、Esc/Enter 与主题；内容为受限纯文本，不承载富 HTML；串行显示，模块停用时未关闭的对话框自动取消。纯前端能力，不新增原生权限或 Rust 命令。
+- 新增 Host SDK V10 模块剪贴板能力；模块在清单 `nativeCapabilities.clipboard` 声明 `text: true` 并经用户批准后，可通过 `sdk.clipboard.readText()` / `writeText(text)` 读写系统剪贴板纯文本。复用既有 V3 原生能力审批与生命周期清理；只支持纯文本，不记录剪贴板正文。基于 `tauri-plugin-clipboard-manager`。
+- 新增 Host SDK V9 模块数据导出/导入能力；模块可通过 `sdk.data.exportBackup()` 把自身隔离 SQLite 与私有设置导出为单个归档文件（用户经系统对话框选择位置），用 `sdk.data.importBackup(grantId)` 从归档恢复。模块只收到不透明 grant 摘要不接触真实路径；导入校验归档归属与格式，拒绝其他模块的归档，模块仍活动时拒绝覆盖。不新增原生权限，复用既有外部文件 grant。
+- 新增 Host SDK V8 模块系统通知能力；模块在清单 `nativeCapabilities.notifications` 声明 `system: true` 并经用户批准后，可通过 `sdk.notifications.show({ title, body })` 向操作系统发起系统通知。复用既有 V3 原生能力审批、指纹、摘要与生命周期清理；标题与正文为有限长度纯文本，底座截断校验，不附加机密数据。基于 `tauri-plugin-notification`。
+- 新增 Host SDK V7 模块事件总线；模块可在清单 `events.publishes` / `events.subscribes` 声明事件，通过 `sdk.events.publish()` 发布数据变化通知，其他模块用 `sdk.events.subscribe()` 自动接收。事件是单向通知、异步投递、按发布顺序、单订阅者异常不影响他人；载荷复用模块服务的受限 JSON 边界并深复制，发布者身份由底座注入不可伪造；模块停用后自动退订且不补投离线事件。订阅不需要把发布者声明为模块依赖。
+- 修复 Rust 数据库命令版本范围检查停留在 `2..=5` 的缺陷，SDK V6 模块现在可以正常调用数据库（之前被错误拒绝）；同时支持 V7。
+
+### Changed
+
+- 运行时模块清单与加载器接受 SDK V12；V2–V11 模块继续按原协议运行且不会获得 HTTP 代理能力。
+- 独立 `tauri-module-template` 升级为 Host SDK V12，新增受限 HTTP 代理模拟宿主与清单示例。
+- 运行时模块清单与加载器接受 SDK V11；V2–V10 模块继续按原协议运行且不会获得对话框能力。
+- 独立 `tauri-module-template` 升级为 Host SDK V11，新增模态对话框模拟宿主与清单示例。
+- 运行时模块清单与加载器接受 SDK V10；V2–V9 模块继续按原协议运行且不会获得剪贴板能力。
+- 独立 `tauri-module-template` 升级为 Host SDK V10，新增剪贴板模拟宿主与清单示例。
+- 运行时模块清单与加载器接受 SDK V9；V2–V8 模块继续按原协议运行且不会获得数据迁移能力。
+- 独立 `tauri-module-template` 升级为 Host SDK V9，新增数据导出/导入模拟宿主与清单示例。
+- 运行时模块清单与加载器接受 SDK V8；V2–V7 模块继续按原协议运行且不会获得通知能力。
+- 独立 `tauri-module-template` 升级为 Host SDK V8，新增系统通知模拟宿主与清单示例。
+- 运行时模块清单与加载器接受 SDK V7；V2–V6 模块继续按原协议运行且不会获得事件能力。
+- 独立 `tauri-module-template` 升级为 Host SDK V7，新增事件总线模拟宿主与清单示例。
+- 参考模块 `local-notes` 升级到 SDK V7，便签增删改成功后发布 `notes.changed.v1`；`notes-dashboard` 升级到 SDK V7，订阅该事件自动刷新统计，保留手动刷新。
+
+## [0.3.0] - 2026-07-23
+
+### Added
+
+- 新增 Host SDK V6 本地仓库依赖安装计划；市场可预览传递必需依赖、版本动作与权限变化，并通过短期不透明 `planId` 请求执行。
+- 新增多包安装事务与启动恢复记录；最终校验、部分写入或进程中断不会留下半套依赖安装结果。
 - 新增 Host SDK V5 受限本地模块仓库能力；获批模块可通过不透明目录授权扫描顶层 `.mtp`，并复用基座校验、依赖解析与回滚流程完成安装或升级。
 - 新增独立 `local-module-market` 规划，市场界面、目录记忆和安装交互保持为可拆卸模块，基座不硬编码市场页面。
 - 新增 Host SDK V4 模块服务总线，服务注册受清单约束，服务调用受模块依赖约束，并在 SDK 释放时自动清理。
@@ -22,6 +52,8 @@
 
 ### Changed
 
+- 本地模块市场升级到 0.2.0 / Host SDK V6，安装前展示依赖顺序、版本动作、权限等待和阻塞诊断；过期计划必须重新确认。
+- 运行时模块清单与加载器接受 SDK V6；V2–V5 模块继续按原协议运行。
 - 运行时模块清单与加载器接受 SDK V5；V2–V4 模块继续按原协议运行且不会获得仓库能力。
 - 运行时模块清单与安装器接受 SDK V4 和 `services.provides`；服务型 V4 模块无需为空原生权限执行审批。
 - 独立 `tauri-module-template` 升级为 Host SDK V4，并加入模块服务模拟宿主。

@@ -66,3 +66,74 @@
 #### Scenario: 旧版模块继续运行
 - **WHEN** 基座加载合法的 Host SDK V2、V3 或 V4 模块
 - **THEN** 基座 SHALL 继续提供对应版本的原有 API，且不得向旧模块注入 V5 仓库能力
+
+### Requirement: 模板必须提供可用的 Host SDK V7 事件总线开发体验
+模板 MUST 提供继承 Host SDK V6 的 Host SDK V7 TypeScript 类型，包括 `events` 命名空间与事件信封类型，并 SHALL 在浏览器预览宿主中按清单声明模拟事件发布、订阅、信封注入与未声明拒绝。模板模块 MUST 能在预览页发布与订阅已声明事件并立即看到投递。模拟事件、服务和原生能力只用于开发预览，不得暗示绕过清单、依赖、权限或宿主校验。
+
+#### Scenario: 浏览器预览发布与订阅事件
+- **WHEN** 开发者运行开发命令并在预览页发布一个清单声明的事件
+- **THEN** 已订阅该事件的监听器收到底座注入的信封，包含事件 ID、发布者模块 ID、时间与隔离载荷副本
+
+#### Scenario: TypeScript 检查事件 API 用法
+- **WHEN** 模块代码调用 Host SDK V7 未声明的事件、使用越界的事件数据类型或缺少任一模块页面语言词典
+- **THEN** 类型检查或模块测试失败
+
+#### Scenario: 旧版模块不被注入 V7 事件能力
+- **WHEN** 基座加载合法的 Host SDK V2、V3、V4、V5 或 V6 模块
+- **THEN** 基座 SHALL 继续提供对应版本的原有 API，且不得向旧模块注入 V7 事件能力
+
+### Requirement: 模板必须提供可用的 Host SDK V8 通知开发体验
+模板 MUST 提供继承 Host SDK V7 的 Host SDK V8 TypeScript 类型，包括 `notifications` 命名空间，并 SHALL 在浏览器预览宿主中模拟通知发送（浏览器无系统通知，模拟宿主仅记录意图并回显，不真实推送）。模拟通知只用于开发预览，不得暗示绕过清单或权限审批。
+
+#### Scenario: 浏览器预览模拟通知
+- **WHEN** 开发者在预览页调用 `hostSdk.notifications.show`
+- **THEN** 模拟宿主记录通知标题与正文并回显，不真实调用系统通知
+
+#### Scenario: 旧版模块不被注入 V8 通知能力
+- **WHEN** 基座加载合法的 Host SDK V2–V7 模块
+- **THEN** 基座 SHALL 继续提供对应版本的原有 API，且不得向旧模块注入 V8 通知能力
+
+### Requirement: 模板必须提供可用的 Host SDK V9 数据迁移开发体验
+模板 MUST 提供继承 Host SDK V8 的 Host SDK V9 TypeScript 类型，包括 `data` 命名空间，并 SHALL 在浏览器预览宿主中模拟导出/导入（浏览器无真实数据库文件，模拟宿主用内存快照往返，不真实写盘）。模拟只用于开发预览，不得暗示绕过 grant 或归属校验。
+
+#### Scenario: 浏览器预览模拟导出导入
+- **WHEN** 开发者在预览页调用 `hostSdk.data.exportBackup()` 后再 `importBackup`
+- **THEN** 模拟宿主用内存快照完成往返并回显摘要，不真实读写磁盘
+
+#### Scenario: 旧版模块不被注入 V9 数据能力
+- **WHEN** 基座加载合法的 Host SDK V2–V8 模块
+- **THEN** 基座 SHALL 继续提供对应版本的原有 API，且不得向旧模块注入 V9 数据能力
+
+### Requirement: 模板必须提供可用的 Host SDK V10 剪贴板开发体验
+模板 MUST 提供继承 Host SDK V9 的 Host SDK V10 TypeScript 类型，包括 `clipboard` 命名空间，并 SHALL 在浏览器预览宿主中模拟剪贴板读写（浏览器用内存缓冲往返，不真实访问系统剪贴板）。模拟只用于开发预览，不得暗示绕过清单或权限审批。
+
+#### Scenario: 浏览器预览模拟剪贴板
+- **WHEN** 开发者在预览页调用 `hostSdk.clipboard.writeText` 后再 `readText`
+- **THEN** 模拟宿主用内存缓冲完成往返并回显，不真实访问系统剪贴板
+
+#### Scenario: 旧版模块不被注入 V10 剪贴板能力
+- **WHEN** 基座加载合法的 Host SDK V2–V9 模块
+- **THEN** 基座 SHALL 继续提供对应版本的原有 API，且不得向旧模块注入 V10 剪贴板能力
+
+### Requirement: 模板必须提供可用的 Host SDK V11 对话框开发体验
+模板 MUST 提供继承 Host SDK V10 的 Host SDK V11 TypeScript 类型，包括 `dialogs` 命名空间，并 SHALL 在浏览器预览宿主中模拟 `confirm` / `prompt`（浏览器用内存实现同步回显，不真实模态）。模拟只用于开发预览，不得暗示绕过外壳托管。
+
+#### Scenario: 浏览器预览模拟对话框
+- **WHEN** 开发者在预览页调用 `hostSdk.dialogs.confirm` 或 `prompt`
+- **THEN** 模拟宿主返回结果并回显，不真实渲染系统模态
+
+#### Scenario: 旧版模块不被注入 V11 对话框能力
+- **WHEN** 基座加载合法的 Host SDK V2–V10 模块
+- **THEN** 基座 SHALL 继续提供对应版本的原有 API，且不得向旧模块注入 V11 对话框能力
+
+### Requirement: 模板必须提供可用的 Host SDK V12 HTTP 代理开发体验
+模板 MUST 提供继承 Host SDK V11 的 Host SDK V12 TypeScript 类型，包括 `http` 命名空间，并 SHALL 在浏览器预览宿主中模拟 `fetch`（浏览器用内存固定回显，不真实联网）。模拟只用于开发预览，不得暗示绕过清单或权限审批。
+
+#### Scenario: 浏览器预览模拟 HTTP 请求
+- **WHEN** 开发者在预览页调用 `hostSdk.http.fetch`
+- **THEN** 模拟宿主返回固定回显结果，不真实发起网络请求
+
+#### Scenario: 旧版模块不被注入 V12 HTTP 能力
+- **WHEN** 基座加载合法的 Host SDK V2–V11 模块
+- **THEN** 基座 SHALL 继续提供对应版本的原有 API，且不得向旧模块注入 V12 HTTP 能力
+
