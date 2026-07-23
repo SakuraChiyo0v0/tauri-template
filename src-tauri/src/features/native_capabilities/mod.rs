@@ -1,4 +1,7 @@
+pub mod clipboard;
 pub mod filesystem;
+pub mod http_proxy;
+pub mod notifications;
 pub mod permissions;
 pub mod process;
 pub mod registry;

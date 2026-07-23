@@ -15,7 +15,7 @@ interface ServiceRegistration {
   handlers: Record<string, RuntimeServiceHandler>;
 }
 
-function cloneServiceValue(value: unknown, label: string) {
+export function cloneServiceValue(value: unknown, label: string) {
   const seen = new Set<object>();
 
   const clone = (current: unknown, depth: number): RuntimeServiceValue => {
