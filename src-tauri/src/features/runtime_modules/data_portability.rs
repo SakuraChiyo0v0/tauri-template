@@ -10,6 +10,7 @@ use crate::features::runtime_modules::{
 
 const MAGIC: &[u8; 8] = b"MTBKV001";
 const DATABASE_FILE: &str = "index.sqlite";
+const SQLITE_HEADER: &[u8; 16] = b"SQLite format 3\0";
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -140,6 +141,7 @@ pub fn import_module_backup(
         std::fs::create_dir_all(parent)
             .map_err(|error| format!("create module database directory: {error}"))?;
     }
+    validate_database_bytes(database_bytes)?;
     std::fs::write(&database_path, database_bytes)
         .map_err(|error| format!("write module database: {error}"))?;
     Ok(ImportResult {
@@ -147,6 +149,15 @@ pub fn import_module_backup(
         settings_json: header.settings_json,
         database_size: database_bytes.len() as u64,
     })
+}
+
+fn validate_database_bytes(database_bytes: &[u8]) -> Result<(), String> {
+    if database_bytes.len() < SQLITE_HEADER.len()
+        || &database_bytes[..SQLITE_HEADER.len()] != SQLITE_HEADER
+    {
+        return Err("invalid SQLite database".into());
+    }
+    Ok(())
 }
 
 fn database_manager(app: &AppHandle) -> Result<ModuleDatabaseManager, String> {
@@ -172,8 +183,21 @@ mod tests {
     use super::*;
 
     #[test]
+    fn rejects_database_bytes_without_sqlite_header() {
+        assert_eq!(
+            validate_database_bytes(b"not a SQLite database"),
+            Err("invalid SQLite database".to_string())
+        );
+    }
+
+    #[test]
+    fn accepts_database_bytes_with_sqlite_header() {
+        assert!(validate_database_bytes(b"SQLite format 3\0payload").is_ok());
+    }
+
+    #[test]
     fn round_trips_an_archive_in_memory() {
-        let database_bytes = b"SQLite-format-3\0fake-content".to_vec();
+        let database_bytes = b"SQLite format 3\0fake-content".to_vec();
         let header = BackupArchiveHeader {
             magic: String::from_utf8(MAGIC.to_vec()).unwrap(),
             version: 1,
