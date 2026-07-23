@@ -1,4 +1,5 @@
 pub mod database;
+pub mod data_portability;
 pub mod manifest;
 pub mod plan;
 pub mod repository;
@@ -8,7 +9,7 @@ pub mod types;
 
 use std::{
     collections::{BTreeMap, HashSet},
-    path::Path,
+    path::{Path, PathBuf},
 };
 
 use semver::Version;
@@ -20,6 +21,8 @@ use crate::features::native_capabilities::runtime::NativeRuntimeState;
 use database::{
     DatabaseExecuteResult, DatabaseStatement, ModuleDataInventoryItem, ModuleDatabaseManager,
 };
+use data_portability::{ExportResult, ImportResult};
+use manifest::supports_database_api;
 use store::{
     ModuleStore, RuntimeModuleEntry, RuntimeModuleOperationResult, RuntimeModulePlanSnapshot,
 };
@@ -52,7 +55,7 @@ fn require_active_database_module(app: &AppHandle, module_id: &str) -> Result<()
         .iter()
         .find(|module| module.manifest.id == module_id)
         .ok_or_else(|| format!("runtime module is not installed: {module_id}"))?;
-    if !(2..=5).contains(&module.manifest.sdk_version) {
+    if !supports_database_api(module.manifest.sdk_version) {
         return Err(format!(
             "runtime module does not use a supported Host SDK version: {module_id}"
         ));
@@ -282,4 +285,23 @@ pub fn clear_runtime_module_data(
     manager
         .inventory(&installed)
         .map_err(RuntimeModuleCommandError::from)
+}
+
+#[tauri::command]
+pub fn export_runtime_module_data_backup(
+    app: AppHandle,
+    module_id: String,
+    settings_json: String,
+    target_path: String,
+) -> Result<ExportResult, String> {
+    data_portability::export_module_backup(&app, &module_id, settings_json, PathBuf::from(target_path))
+}
+
+#[tauri::command]
+pub fn import_runtime_module_data_backup(
+    app: AppHandle,
+    module_id: String,
+    source_path: String,
+) -> Result<ImportResult, String> {
+    data_portability::import_module_backup(&app, &module_id, PathBuf::from(source_path))
 }
