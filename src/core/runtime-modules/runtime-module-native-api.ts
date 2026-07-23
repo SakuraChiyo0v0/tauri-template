@@ -32,6 +32,9 @@ export const runtimeModuleNativeApi: RuntimeModuleNativeBackend = {
   listShortcuts: (sessionToken) => call("list_runtime_module_shortcuts", { sessionToken }),
   rebindShortcut: (sessionToken, shortcutId, accelerator) => call("rebind_runtime_module_session_shortcut", { sessionToken, shortcutId, accelerator }),
   disableShortcut: (sessionToken, shortcutId) => call("disable_runtime_module_session_shortcut", { sessionToken, shortcutId }),
+  createModuleRepositoryGrant: (sessionToken, path) => call("create_runtime_module_repository_grant", { sessionToken, path }),
+  scanModuleRepository: (sessionToken, grantId) => call("scan_runtime_module_repository", { sessionToken, grantId }),
+  installModuleFromRepository: (sessionToken, grantId, fileName) => call("install_runtime_module_from_repository", { sessionToken, grantId, fileName }),
   onTrayAction: (moduleId, listener) => listen<{ moduleId: string; itemId: string }>("runtime-module-tray", (event) => {
     if (event.payload.moduleId === moduleId) listener(event.payload.itemId);
   }),

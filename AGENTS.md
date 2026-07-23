@@ -26,6 +26,7 @@ Read this file before changing the project. Keep the template free of demo busin
 - Keep source-level installation explicit. Runtime modules must be user-selected local `.mtp` packages; do not add remote downloads, a plugin store, dynamic Rust, or extra native permissions without a new specification.
 - Runtime modules contribute navigation and basic settings only through `manifest.json`; never add module-specific branches to the shell or settings page.
 - SDK V4 providers must declare service IDs in `services.provides`. Consumers may call only declared module dependencies, and service payloads must stay within the JSON-compatible Host SDK value type.
+- SDK V5 repository modules must declare `nativeCapabilities.moduleRepository.install` and external read/list access. They may receive only opaque grants and top-level `.mtp` file names; package validation and installation remain host-owned.
 - Treat the Host SDK as a public ABI. Do not expose internal stores, the feature registry, raw Tauri invoke, or arbitrary filesystem access.
 - Add focused tests for registry contracts and observable behavior.
 

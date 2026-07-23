@@ -8,7 +8,7 @@ use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use tempfile::NamedTempFile;
 
-use crate::features::runtime_modules::manifest::{is_module_id, LocalizedText};
+use crate::features::runtime_modules::manifest::{LocalizedText, is_module_id};
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, PartialOrd, Ord)]
 #[serde(rename_all = "kebab-case")]
@@ -92,6 +92,12 @@ pub struct ShortcutDeclaration {
     pub accelerator: String,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct ModuleRepositoryCapability {
+    pub install: bool,
+}
+
 #[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct NativeCapabilities {
@@ -103,6 +109,7 @@ pub struct NativeCapabilities {
     pub tray: Vec<TrayItemDeclaration>,
     #[serde(default)]
     pub shortcuts: Vec<ShortcutDeclaration>,
+    pub module_repository: Option<ModuleRepositoryCapability>,
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
@@ -113,22 +120,32 @@ pub struct NormalizedNativeCapabilities {
     pub registry: Vec<RegistryScope>,
     pub tray: Vec<TrayItemDeclaration>,
     pub shortcuts: Vec<ShortcutDeclaration>,
+    pub module_repository: Option<ModuleRepositoryCapability>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub enum NativePermissionSummary {
     PrivateFilesystem,
-    ExternalFilesystem { access: Vec<String> },
-    UrlSchemes { schemes: Vec<String> },
+    ExternalFilesystem {
+        access: Vec<String>,
+    },
+    UrlSchemes {
+        schemes: Vec<String>,
+    },
     ExecutableGrants,
     Registry {
         hive: String,
         key: String,
         access: String,
     },
-    Tray { count: usize },
-    Shortcuts { count: usize },
+    Tray {
+        count: usize,
+    },
+    Shortcuts {
+        count: usize,
+    },
+    ModuleRepositoryInstall,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -138,6 +155,7 @@ pub enum NativeCapabilityKind {
     Registry,
     Tray,
     Shortcuts,
+    ModuleRepository,
 }
 
 impl NativeCapabilities {
@@ -199,12 +217,21 @@ impl NativeCapabilities {
         }
         shortcuts.sort_by(|left, right| left.id.cmp(&right.id));
 
+        if self
+            .module_repository
+            .as_ref()
+            .is_some_and(|capability| !capability.install)
+        {
+            return Err("module repository capability must request install access".into());
+        }
+
         Ok(NormalizedNativeCapabilities {
             filesystem,
             process,
             registry,
             tray,
             shortcuts,
+            module_repository: self.module_repository.clone(),
         })
     }
 }
@@ -242,19 +269,17 @@ impl NormalizedNativeCapabilities {
                 result.push(NativePermissionSummary::ExecutableGrants);
             }
         }
-        result.extend(
-            self.registry
-                .iter()
-                .map(|scope| NativePermissionSummary::Registry {
-                    hive: scope.hive.label().into(),
-                    key: scope.key.clone(),
-                    access: match scope.access {
-                        RegistryAccess::Read => "read",
-                        RegistryAccess::ReadWrite => "read_write",
-                    }
-                    .into(),
-                }),
-        );
+        result.extend(self.registry.iter().map(|scope| {
+            NativePermissionSummary::Registry {
+                hive: scope.hive.label().into(),
+                key: scope.key.clone(),
+                access: match scope.access {
+                    RegistryAccess::Read => "read",
+                    RegistryAccess::ReadWrite => "read_write",
+                }
+                .into(),
+            }
+        }));
         if !self.tray.is_empty() {
             result.push(NativePermissionSummary::Tray {
                 count: self.tray.len(),
@@ -264,6 +289,9 @@ impl NormalizedNativeCapabilities {
             result.push(NativePermissionSummary::Shortcuts {
                 count: self.shortcuts.len(),
             });
+        }
+        if self.module_repository.is_some() {
+            result.push(NativePermissionSummary::ModuleRepositoryInstall);
         }
         result
     }
@@ -275,6 +303,7 @@ impl NormalizedNativeCapabilities {
             NativeCapabilityKind::Registry => !self.registry.is_empty(),
             NativeCapabilityKind::Tray => !self.tray.is_empty(),
             NativeCapabilityKind::Shortcuts => !self.shortcuts.is_empty(),
+            NativeCapabilityKind::ModuleRepository => self.module_repository.is_some(),
         }
     }
 
@@ -290,6 +319,7 @@ impl NormalizedNativeCapabilities {
                 .shortcuts
                 .iter()
                 .all(|item| approved.shortcuts.contains(item))
+            && (self.module_repository.is_none() || approved.module_repository.is_some())
     }
 }
 
@@ -545,6 +575,7 @@ mod tests {
                 description: text("显示主窗口", "Show main window"),
                 accelerator: "Ctrl+Shift+M".into(),
             }],
+            module_repository: None,
         }
     }
 
@@ -622,5 +653,22 @@ mod tests {
             store.decision("sample-module", &full).unwrap(),
             PermissionDecision::AwaitingApproval
         );
+    }
+
+    #[test]
+    fn module_repository_install_changes_fingerprint_and_permission_summary() {
+        let base = capabilities().normalize().unwrap();
+        let mut requested = capabilities();
+        requested.module_repository = Some(ModuleRepositoryCapability { install: true });
+        let requested = requested.normalize().unwrap();
+
+        assert_ne!(base.fingerprint(), requested.fingerprint());
+        assert!(
+            requested
+                .summary()
+                .contains(&NativePermissionSummary::ModuleRepositoryInstall)
+        );
+        assert!(!requested.is_subset_of(&base));
+        assert!(base.is_subset_of(&requested));
     }
 }

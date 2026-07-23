@@ -277,6 +277,18 @@ impl FilesystemManager {
         resolve_existing_grant_target(&grant)
     }
 
+    pub fn resolve_readable_directory(
+        &self,
+        module_id: &str,
+        grant_id: &str,
+    ) -> Result<PathBuf, String> {
+        let grant = self.require_grant(module_id, grant_id)?;
+        if grant.kind != GrantKind::Directory || !grant.access.read || !grant.access.list {
+            return Err("grant_read_denied".into());
+        }
+        resolve_existing_grant_target(&grant)
+    }
+
     fn require_grant(&self, module_id: &str, grant_id: &str) -> Result<FileGrant, String> {
         validate_module_id(module_id)?;
         let grants = self.load_grants()?;
@@ -568,6 +580,48 @@ mod tests {
         assert_eq!(fs::read(&external).unwrap(), b"updated");
         reopened.revoke_grant("alpha-module", &grant.id).unwrap();
         assert!(reopened.read_grant("alpha-module", &grant.id).is_err());
+    }
+
+    #[test]
+    fn resolves_only_owned_readable_directory_grants_and_honors_revocation() {
+        let temp = tempfile::tempdir().unwrap();
+        let repository = temp.path().join("repository");
+        fs::create_dir(&repository).unwrap();
+        let manager =
+            FilesystemManager::new(temp.path().join("private"), temp.path().join("grants.json"));
+        let grant = manager
+            .create_grant(
+                "market-module",
+                &repository,
+                GrantKind::Directory,
+                GrantAccess {
+                    read: true,
+                    write: false,
+                    list: true,
+                    execute: false,
+                },
+            )
+            .unwrap();
+
+        assert_eq!(
+            manager
+                .resolve_readable_directory("market-module", &grant.id)
+                .unwrap(),
+            fs::canonicalize(&repository).unwrap()
+        );
+        assert_eq!(
+            manager
+                .resolve_readable_directory("other-module", &grant.id)
+                .unwrap_err(),
+            "grant_owner_mismatch"
+        );
+        manager.revoke_grant("market-module", &grant.id).unwrap();
+        assert_eq!(
+            manager
+                .resolve_readable_directory("market-module", &grant.id)
+                .unwrap_err(),
+            "unknown_grant"
+        );
     }
 
     #[cfg(unix)]

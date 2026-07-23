@@ -91,6 +91,33 @@ describe("runtime module manifest", () => {
     });
   });
 
+  it("accepts Host SDK V5 with module repository install access", () => {
+    expect(parseRuntimeModuleManifest({
+      ...validManifest,
+      sdkVersion: 5,
+      services: { provides: [] },
+      nativeCapabilities: {
+        filesystem: { private: false, external: ["read", "list"] },
+        process: null,
+        registry: [],
+        tray: [],
+        shortcuts: [],
+        moduleRepository: { install: true },
+      },
+    })).toMatchObject({
+      sdkVersion: 5,
+      nativeCapabilities: { moduleRepository: { install: true } },
+    });
+  });
+
+  it("rejects module repository access before Host SDK V5", () => {
+    expect(() => parseRuntimeModuleManifest({
+      ...validManifest,
+      sdkVersion: 4,
+      nativeCapabilities: { moduleRepository: { install: true } },
+    })).toThrow(/Host SDK V5/i);
+  });
+
   it.each([
     { name: "services on SDK V3", sdkVersion: 3, services: { provides: ["notes.v1"] } },
     { name: "duplicate service", sdkVersion: 4, services: { provides: ["notes.v1", "notes.v1"] } },

@@ -1,4 +1,5 @@
 import packageMetadata from "../../../package.json";
+import { open } from "@tauri-apps/plugin-dialog";
 import { createModuleLogger } from "@/features/logging/logger";
 import { getSetting, setSetting, subscribeSettings } from "@/core/settings/setting-store";
 import { getThemeSnapshot, subscribeTheme } from "@/themes/theme-store";
@@ -16,6 +17,13 @@ import type {
   RuntimeModuleNativeBackend,
   RuntimeSqlValue,
 } from "./runtime-module-types";
+
+export type RuntimeModuleRepositoryDirectoryPicker = () => Promise<string | null>;
+
+const defaultRepositoryDirectoryPicker: RuntimeModuleRepositoryDirectoryPicker = async () => {
+  const selected = await open({ directory: true, multiple: false });
+  return typeof selected === "string" ? selected : null;
+};
 
 const nativeSessions = new WeakMap<RuntimeModuleHostSdk, {
   backend: RuntimeModuleNativeBackend;
@@ -39,6 +47,7 @@ export async function createRuntimeModuleHostSdk(
   databaseBackend: RuntimeModuleDatabaseBackend = runtimeModuleDatabaseApi,
   nativeBackend: RuntimeModuleNativeBackend = runtimeModuleNativeApi,
   serviceBus: RuntimeModuleServiceBus = runtimeModuleServiceBus,
+  repositoryDirectoryPicker: RuntimeModuleRepositoryDirectoryPicker = defaultRepositoryDirectoryPicker,
 ): Promise<RuntimeModuleHostSdk> {
   const moduleId = module.manifest.id;
   const base: Omit<RuntimeModuleHostSdkV2, "sdkVersion" | "database"> = {
@@ -117,22 +126,35 @@ export async function createRuntimeModuleHostSdk(
     },
   };
 
+  const services = module.manifest.sdkVersion >= 4
+    ? serviceBus.createModuleApi(
+        moduleId,
+        module.manifest.services?.provides ?? [],
+        [...module.requiredDependencies, ...module.optionalDependencies].map((dependency) => dependency.id),
+      )
+    : undefined;
   const sdk: RuntimeModuleHostSdk = module.manifest.sdkVersion === 3
     ? { ...nativeApis, sdkVersion: 3 }
-    : {
-        ...nativeApis,
-        sdkVersion: 4,
-        services: serviceBus.createModuleApi(
-          moduleId,
-          module.manifest.services?.provides ?? [],
-          [...module.requiredDependencies, ...module.optionalDependencies].map((dependency) => dependency.id),
-        ),
-      };
+    : module.manifest.sdkVersion === 4
+      ? { ...nativeApis, sdkVersion: 4, services: services! }
+      : {
+          ...nativeApis,
+          sdkVersion: 5,
+          services: services!,
+          moduleRepository: {
+            async chooseDirectory() {
+              const path = await repositoryDirectoryPicker();
+              return path === null ? null : nativeBackend.createModuleRepositoryGrant(token, path);
+            },
+            scan: (grantId) => nativeBackend.scanModuleRepository(token, grantId),
+            install: (grantId, fileName) => nativeBackend.installModuleFromRepository(token, grantId, fileName),
+          },
+        };
   nativeSessions.set(sdk, {
     backend: nativeBackend,
     token,
     cleanups,
-    releaseServices: sdk.sdkVersion === 4 ? () => serviceBus.releaseModule(moduleId) : undefined,
+    releaseServices: sdk.sdkVersion >= 4 ? () => serviceBus.releaseModule(moduleId) : undefined,
   });
   return sdk;
 }

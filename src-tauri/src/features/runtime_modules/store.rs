@@ -125,9 +125,19 @@ pub struct ModuleStore {
     host_version: Version,
 }
 
+struct ValidatedPackage {
+    bytes: Vec<u8>,
+    manifest: RuntimeModuleManifest,
+}
+
 impl ModuleStore {
     pub fn new(root: PathBuf, host_version: Version) -> Self {
         Self { root, host_version }
+    }
+
+    pub fn inspect_package(&self, package_path: &Path) -> Result<RuntimeModuleManifest, String> {
+        self.read_validated_package(package_path)
+            .map(|package| package.manifest)
     }
 
     #[cfg(test)]
@@ -794,28 +804,13 @@ impl ModuleStore {
     }
 
     fn save_package(&self, package_path: &Path) -> Result<(String, String), String> {
-        if package_path.extension().and_then(|value| value.to_str()) != Some("mtp") {
-            return Err("module package must use the .mtp extension".into());
-        }
-        self.cleanup_staging()?;
-        let metadata =
-            fs::metadata(package_path).map_err(io_error("read module package metadata"))?;
-        if !metadata.is_file() || metadata.len() > MAX_PACKAGE_BYTES {
-            return Err(format!("module package exceeds {MAX_PACKAGE_BYTES} bytes"));
-        }
-
-        let package = fs::read(package_path).map_err(io_error("read module package"))?;
-        let sha256 = format!("{:x}", Sha256::digest(&package));
-        let mut archive = ZipArchive::new(Cursor::new(&package))
+        let validated = self.read_validated_package(package_path)?;
+        let sha256 = format!("{:x}", Sha256::digest(&validated.bytes));
+        let manifest = validated.manifest;
+        let mut archive = ZipArchive::new(Cursor::new(&validated.bytes))
             .map_err(|error| format!("invalid module ZIP package: {error}"))?;
-        let paths = validate_archive(&mut archive)?;
-        let manifest_bytes = read_archive_file(&mut archive, "manifest.json")?;
-        let manifest =
-            RuntimeModuleManifest::parse_and_validate(&manifest_bytes, &self.host_version)?;
-        if !paths.contains(Path::new(&manifest.entry)) {
-            return Err(format!("module entry is missing: {}", manifest.entry));
-        }
 
+        self.cleanup_staging()?;
         let module_dir = self.module_dir(&manifest.id);
         let state_path = module_dir.join("state.json");
         let existing_state = if state_path.exists() {
@@ -865,6 +860,33 @@ impl ModuleStore {
             return Err(error);
         }
         Ok((manifest.id, manifest.version))
+    }
+
+    fn read_validated_package(&self, package_path: &Path) -> Result<ValidatedPackage, String> {
+        if package_path.extension().and_then(|value| value.to_str()) != Some("mtp") {
+            return Err("module package must use the .mtp extension".into());
+        }
+        let metadata =
+            fs::metadata(package_path).map_err(io_error("read module package metadata"))?;
+        if !metadata.is_file() || metadata.len() > MAX_PACKAGE_BYTES {
+            return Err(format!("module package exceeds {MAX_PACKAGE_BYTES} bytes"));
+        }
+
+        let package = fs::read(package_path).map_err(io_error("read module package"))?;
+        let mut archive = ZipArchive::new(Cursor::new(&package))
+            .map_err(|error| format!("invalid module ZIP package: {error}"))?;
+        let paths = validate_archive(&mut archive)?;
+        let manifest_bytes = read_archive_file(&mut archive, "manifest.json")?;
+        let manifest =
+            RuntimeModuleManifest::parse_and_validate(&manifest_bytes, &self.host_version)?;
+        if !paths.contains(Path::new(&manifest.entry)) {
+            return Err(format!("module entry is missing: {}", manifest.entry));
+        }
+        drop(archive);
+        Ok(ValidatedPackage {
+            bytes: package,
+            manifest,
+        })
     }
 
     pub fn read_entry(&self, module_id: &str) -> Result<RuntimeModuleEntry, String> {

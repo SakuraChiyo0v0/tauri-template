@@ -38,7 +38,8 @@ function formatPermissionSummary(item: NativePermissionSummary, locale: Supporte
     scope: `${item.hive}\\${item.key} (${translate(locale, item.access === "read_write" ? "modules.permission.access.readWrite" : "modules.permission.access.read")})`,
   });
   if (item.kind === "tray") return translate(locale, "modules.permission.tray", { count: item.count });
-  return translate(locale, "modules.permission.shortcuts", { count: item.count });
+  if (item.kind === "shortcuts") return translate(locale, "modules.permission.shortcuts", { count: item.count });
+  return translate(locale, "modules.permission.moduleRepositoryInstall");
 }
 
 function messageOf(error: unknown, locale: SupportedLocale) {

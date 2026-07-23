@@ -3,7 +3,7 @@ import type { NavigationGroup } from "@/core/features/feature-types";
 import { isLocalizedText, type LocalizedText } from "@/core/i18n/localized-text";
 
 export const RUNTIME_MODULE_SCHEMA_VERSION = 2;
-export const RUNTIME_MODULE_SDK_VERSION = 4;
+export const RUNTIME_MODULE_SDK_VERSION = 5;
 
 export type RuntimeExternalFileAccess = "read" | "write" | "list";
 export type RuntimeRegistryAccess = "read" | "read-write";
@@ -14,6 +14,7 @@ export interface RuntimeNativeCapabilities {
   registry: Array<{ hive: "HKCU" | "HKLM"; key: string; access: RuntimeRegistryAccess }>;
   tray: Array<{ id: string; label?: LocalizedText; kind: "button" | "check" | "separator"; order: number }>;
   shortcuts: Array<{ id: string; description: LocalizedText; accelerator: string }>;
+  moduleRepository?: { install: true } | null;
 }
 
 export interface RuntimeNavigationManifest {
@@ -48,7 +49,7 @@ export interface RuntimeModuleManifest {
   description: LocalizedText;
   version: string;
   hostVersion: string;
-  sdkVersion: 2 | 3 | 4;
+  sdkVersion: 2 | 3 | 4 | 5;
   entry: string;
   dependencies: RuntimeModuleDependencies;
   services?: RuntimeModuleServicesManifest;
@@ -90,7 +91,7 @@ function optionalLocalizedText(value: unknown, label: string, maxLength = 200) {
 
 function parseNativeCapabilities(value: unknown): RuntimeNativeCapabilities {
   const capabilities = object(value, "nativeCapabilities");
-  const allowedKeys = new Set(["filesystem", "process", "registry", "tray", "shortcuts"]);
+  const allowedKeys = new Set(["filesystem", "process", "registry", "tray", "shortcuts", "moduleRepository"]);
   const unknownKey = Object.keys(capabilities).find((key) => !allowedKeys.has(key));
   if (unknownKey) throw new Error(`Unknown native capability: ${unknownKey}`);
 
@@ -162,7 +163,14 @@ function parseNativeCapabilities(value: unknown): RuntimeNativeCapabilities {
       accelerator,
     };
   });
-  return { filesystem, process, registry, tray, shortcuts };
+  const moduleRepository = capabilities.moduleRepository == null ? null : (() => {
+    const item = object(capabilities.moduleRepository, "nativeCapabilities.moduleRepository");
+    if (Object.keys(item).some((key) => key !== "install") || item.install !== true) {
+      throw new Error("Invalid native module repository capability.");
+    }
+    return { install: true as const };
+  })();
+  return { filesystem, process, registry, tray, shortcuts, moduleRepository };
 }
 
 function parseDependencies(value: unknown, moduleId: string): RuntimeModuleDependencies {
@@ -194,9 +202,9 @@ function parseDependencies(value: unknown, moduleId: string): RuntimeModuleDepen
   };
 }
 
-function parseServices(value: unknown, sdkVersion: 2 | 3 | 4): RuntimeModuleServicesManifest {
+function parseServices(value: unknown, sdkVersion: 2 | 3 | 4 | 5): RuntimeModuleServicesManifest {
   if (value === undefined) return { provides: [] };
-  if (sdkVersion !== 4) throw new Error("Module services require Host SDK V4.");
+  if (sdkVersion < 4) throw new Error("Module services require Host SDK V4.");
   const services = object(value, "services");
   const unknownKey = Object.keys(services).find((key) => key !== "provides");
   if (unknownKey || !Array.isArray(services.provides)) throw new Error("Invalid module services declaration.");
@@ -293,7 +301,10 @@ export function parseRuntimeModuleManifest(value: unknown): RuntimeModuleManifes
   const version = string(manifest.version, "module version", 64);
   if (!semverPattern.test(version)) throw new Error(`Invalid module version: ${version}`);
   if (manifest.schemaVersion !== RUNTIME_MODULE_SCHEMA_VERSION) throw new Error("Unsupported module schema version.");
-  if (manifest.sdkVersion !== 2 && manifest.sdkVersion !== 3 && manifest.sdkVersion !== RUNTIME_MODULE_SDK_VERSION) {
+  if (manifest.sdkVersion !== 2
+    && manifest.sdkVersion !== 3
+    && manifest.sdkVersion !== 4
+    && manifest.sdkVersion !== RUNTIME_MODULE_SDK_VERSION) {
     throw new Error("Unsupported module SDK version.");
   }
   const sdkVersion = manifest.sdkVersion;
@@ -303,6 +314,9 @@ export function parseRuntimeModuleManifest(value: unknown): RuntimeModuleManifes
   const nativeCapabilities = sdkVersion >= 3
     ? parseNativeCapabilities(manifest.nativeCapabilities ?? {})
     : undefined;
+  if (sdkVersion < 5 && nativeCapabilities?.moduleRepository) {
+    throw new Error("Module repository access requires Host SDK V5.");
+  }
   const services = parseServices(manifest.services, sdkVersion);
 
   const entry = string(manifest.entry, "module entry", 100);

@@ -86,6 +86,7 @@ const messages = {
   "modules.permission.registry": { "zh-CN": "访问注册表：{scope}", en: "Access registry: {scope}" },
   "modules.permission.tray": { "zh-CN": "注册 {count} 个托盘菜单项", en: "Register {count} tray menu items" },
   "modules.permission.shortcuts": { "zh-CN": "注册 {count} 个全局快捷键", en: "Register {count} global shortcuts" },
+  "modules.permission.moduleRepositoryInstall": { "zh-CN": "扫描并安装所选本地仓库中的模块包", en: "Scan and install modules from a selected local repository" },
   "modules.permission.access.read": { "zh-CN": "读取", en: "read" },
   "modules.permission.access.write": { "zh-CN": "写入", en: "write" },
   "modules.permission.access.list": { "zh-CN": "列出", en: "list" },

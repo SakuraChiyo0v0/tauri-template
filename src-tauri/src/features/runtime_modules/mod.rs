@@ -1,6 +1,7 @@
 pub mod database;
 pub mod manifest;
 pub mod plan;
+pub mod repository;
 pub mod resolver;
 pub mod store;
 pub mod types;
@@ -51,9 +52,9 @@ fn require_active_database_module(app: &AppHandle, module_id: &str) -> Result<()
         .iter()
         .find(|module| module.manifest.id == module_id)
         .ok_or_else(|| format!("runtime module is not installed: {module_id}"))?;
-    if !(2..=4).contains(&module.manifest.sdk_version) {
+    if !(2..=5).contains(&module.manifest.sdk_version) {
         return Err(format!(
-            "runtime module does not use Host SDK V2, V3, or V4: {module_id}"
+            "runtime module does not use a supported Host SDK version: {module_id}"
         ));
     }
     if module.status != RuntimeModuleStatus::Active {

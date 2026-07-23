@@ -141,6 +141,72 @@ describe("runtime module host SDK", () => {
     expect(native.releaseSession).toHaveBeenCalledTimes(2);
   });
 
+  it("exposes repository APIs only to Host SDK V5 and binds opaque values to the native session", async () => {
+    const module = moduleRecord();
+    module.manifest = {
+      ...module.manifest,
+      sdkVersion: 5,
+      services: { provides: [] },
+      nativeCapabilities: {
+        filesystem: { private: false, external: ["read", "list"] },
+        process: null,
+        registry: [],
+        tray: [],
+        shortcuts: [],
+        moduleRepository: { install: true },
+      },
+    };
+    const grant = {
+      id: "repository-grant",
+      moduleId: "sdk-test-module",
+      displayName: "module-market",
+      kind: "directory" as const,
+      access: { read: true, write: false, list: true, execute: false },
+    };
+    const native = {
+      createSession: vi.fn(async () => "native-session-token"),
+      createModuleRepositoryGrant: vi.fn(async () => grant),
+      scanModuleRepository: vi.fn(async () => []),
+      installModuleFromRepository: vi.fn(async () => ({
+        moduleId: "local-notes",
+        version: "0.1.1",
+        selectedVersion: "0.1.1",
+        status: "active" as const,
+        packageInstalled: true,
+        planChanged: true,
+      })),
+    } as unknown as RuntimeModuleNativeBackend;
+
+    const sdk = await createRuntimeModuleHostSdk(
+      module,
+      undefined,
+      native,
+      createRuntimeModuleServiceBus(),
+      async () => "C:/opaque-to-module/repository",
+    );
+    if (sdk.sdkVersion !== 5) throw new Error("expected Host SDK V5");
+
+    await expect(sdk.moduleRepository.chooseDirectory()).resolves.toEqual(grant);
+    await sdk.moduleRepository.scan("repository-grant");
+    await sdk.moduleRepository.install("repository-grant", "local-notes-0.1.1.mtp");
+
+    expect(native.createModuleRepositoryGrant).toHaveBeenCalledWith("native-session-token", "C:/opaque-to-module/repository");
+    expect(native.scanModuleRepository).toHaveBeenCalledWith("native-session-token", "repository-grant");
+    expect(native.installModuleFromRepository).toHaveBeenCalledWith("native-session-token", "repository-grant", "local-notes-0.1.1.mtp");
+  });
+
+  it("does not inject repository APIs into Host SDK V4", async () => {
+    const module = moduleRecord();
+    module.manifest = { ...module.manifest, sdkVersion: 4, services: { provides: [] } };
+    const native = {
+      createSession: vi.fn(async () => "native-session-token"),
+    } as unknown as RuntimeModuleNativeBackend;
+    const sdk = await createRuntimeModuleHostSdk(module, undefined, native, createRuntimeModuleServiceBus());
+
+    expect(sdk.sdkVersion).toBe(4);
+    expect(sdk).not.toHaveProperty("moduleRepository");
+  });
+
   it("namespaces settings to the active module", async () => {
     const sdk = await createRuntimeModuleHostSdk(moduleRecord());
 

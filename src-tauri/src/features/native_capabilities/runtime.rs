@@ -25,7 +25,12 @@ use super::{
     shortcuts::{ShortcutRegistry, ShortcutState, ShortcutStatus},
     tray::{TrayItemUpdate, TrayRegistry},
 };
-use crate::features::runtime_modules::module_store;
+use crate::features::runtime_modules::{
+    module_store,
+    repository::{
+        RepositoryInstallResult, RepositoryPackage, install_repository_package, scan_repository,
+    },
+};
 
 pub struct NativeRuntimeState {
     app: AppHandle,
@@ -490,7 +495,7 @@ pub fn create_runtime_module_native_session(
     let selected = module.selected_version.as_deref() == Some(version.as_str())
         && module.status == crate::features::runtime_modules::types::RuntimeModuleStatus::Active;
     if module.manifest.sdk_version < 3 {
-        return Err("native sessions require Host SDK V3 or V4".into());
+        return Err("native sessions require Host SDK V3 or later".into());
     }
     let permissions = module.manifest.normalized_native_capabilities()?;
     let permission_path = app
@@ -597,6 +602,77 @@ pub fn list_runtime_module_granted_directory(
     state
         .filesystem
         .list_grant_directory(&session.module_id, &grant_id)
+}
+
+fn repository_session(state: &NativeRuntimeState, token: &str) -> Result<NativeSession, String> {
+    let session = state.session(token, NativeCapabilityKind::ModuleRepository)?;
+    let external = &session
+        .permissions
+        .filesystem
+        .as_ref()
+        .ok_or("permission_denied")?
+        .external;
+    if !external.contains(&ExternalFileAccess::Read)
+        || !external.contains(&ExternalFileAccess::List)
+    {
+        return Err("permission_denied".into());
+    }
+    Ok(session)
+}
+
+#[tauri::command]
+pub fn create_runtime_module_repository_grant(
+    state: State<'_, NativeRuntimeState>,
+    session_token: String,
+    path: String,
+) -> Result<FileGrantSummary, String> {
+    let session = repository_session(&state, &session_token)?;
+    state
+        .filesystem
+        .create_grant(
+            &session.module_id,
+            std::path::Path::new(&path),
+            GrantKind::Directory,
+            GrantAccess {
+                read: true,
+                write: false,
+                list: true,
+                execute: false,
+            },
+        )
+        .map(FileGrantSummary::from)
+}
+
+#[tauri::command]
+pub fn scan_runtime_module_repository(
+    state: State<'_, NativeRuntimeState>,
+    session_token: String,
+    grant_id: String,
+) -> Result<Vec<RepositoryPackage>, String> {
+    let session = repository_session(&state, &session_token)?;
+    let repository = state
+        .filesystem
+        .resolve_readable_directory(&session.module_id, &grant_id)?;
+    scan_repository(&module_store(&state.app)?, &repository)
+}
+
+#[tauri::command]
+pub fn install_runtime_module_from_repository(
+    state: State<'_, NativeRuntimeState>,
+    session_token: String,
+    grant_id: String,
+    file_name: String,
+) -> Result<RepositoryInstallResult, String> {
+    let session = repository_session(&state, &session_token)?;
+    let repository = state
+        .filesystem
+        .resolve_readable_directory(&session.module_id, &grant_id)?;
+    let (result, operation) =
+        install_repository_package(&module_store(&state.app)?, &repository, &file_name)?;
+    if operation.plan_changed {
+        state.release_module(&operation.module_id);
+    }
+    Ok(result)
 }
 
 #[tauri::command]

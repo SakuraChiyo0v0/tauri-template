@@ -9,7 +9,7 @@ use crate::features::native_capabilities::permissions::{
 
 pub const SCHEMA_VERSION: u32 = 2;
 pub const MIN_SDK_VERSION: u32 = 2;
-pub const MAX_SDK_VERSION: u32 = 4;
+pub const MAX_SDK_VERSION: u32 = 5;
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, PartialOrd, Ord)]
 #[serde(deny_unknown_fields)]
@@ -156,6 +156,9 @@ impl RuntimeModuleManifest {
         }
         if self.sdk_version < 3 && self.native_capabilities != NativeCapabilities::default() {
             return Err("native capabilities require Host SDK V3".into());
+        }
+        if self.sdk_version < 5 && self.native_capabilities.module_repository.is_some() {
+            return Err("module repository access requires Host SDK V5".into());
         }
         self.native_capabilities.normalize()?;
 
@@ -367,20 +370,51 @@ mod tests {
     }
 
     #[test]
-    fn accepts_sdk_v2_v3_and_v4_but_rejects_other_versions() {
+    fn accepts_sdk_v2_through_v5_but_rejects_other_versions() {
         let mut value = manifest();
         value.sdk_version = 3;
         assert!(value.validate(&Version::new(0, 1, 0)).is_ok());
         value.sdk_version = 4;
         assert!(value.validate(&Version::new(0, 1, 0)).is_ok());
+        value.sdk_version = 5;
+        assert!(value.validate(&Version::new(0, 1, 0)).is_ok());
         value.sdk_version = 1;
         assert!(value.validate(&Version::new(0, 1, 0)).is_err());
-        value.sdk_version = 5;
+        value.sdk_version = 6;
         assert!(
             value
                 .validate(&Version::new(0, 1, 0))
                 .unwrap_err()
                 .contains("SDK version")
+        );
+    }
+
+    #[test]
+    fn accepts_module_repository_access_only_on_sdk_v5() {
+        let mut value = serde_json::to_value(manifest()).unwrap();
+        value["sdkVersion"] = serde_json::json!(5);
+        value["nativeCapabilities"] = serde_json::json!({
+            "filesystem": { "private": false, "external": ["read", "list"] },
+            "registry": [],
+            "tray": [],
+            "shortcuts": [],
+            "moduleRepository": { "install": true }
+        });
+        let parsed = RuntimeModuleManifest::parse_and_validate(
+            &serde_json::to_vec(&value).unwrap(),
+            &Version::new(0, 1, 0),
+        )
+        .unwrap();
+        assert!(parsed.native_capabilities.module_repository.is_some());
+
+        value["sdkVersion"] = serde_json::json!(4);
+        assert!(
+            RuntimeModuleManifest::parse_and_validate(
+                &serde_json::to_vec(&value).unwrap(),
+                &Version::new(0, 1, 0),
+            )
+            .unwrap_err()
+            .contains("Host SDK V5")
         );
     }
 

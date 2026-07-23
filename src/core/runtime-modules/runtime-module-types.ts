@@ -28,7 +28,8 @@ export type NativePermissionSummary =
   | { kind: "executable_grants" }
   | { kind: "registry"; hive: string; key: string; access: "read" | "read_write" }
   | { kind: "tray"; count: number }
-  | { kind: "shortcuts"; count: number };
+  | { kind: "shortcuts"; count: number }
+  | { kind: "module_repository_install" };
 
 export interface RuntimeModuleDiagnostic {
   code: RuntimeModuleDiagnosticCode;
@@ -203,6 +204,31 @@ export interface RuntimeShortcutStatus {
   state: "registered" | "conflict" | "disabled";
 }
 
+export type RuntimeModuleRepositoryPackageStatus =
+  | "not_installed"
+  | "update_available"
+  | "installed"
+  | "older_version"
+  | "invalid";
+
+export interface RuntimeModuleRepositoryPackage {
+  fileName: string;
+  manifest: RuntimeModuleManifest | null;
+  installedVersion: string | null;
+  status: RuntimeModuleRepositoryPackageStatus;
+  permissionSummary: NativePermissionSummary[];
+  error: string | null;
+}
+
+export interface RuntimeModuleRepositoryInstallResult {
+  moduleId: string;
+  version: string;
+  selectedVersion: string | null;
+  status: RuntimeModuleStatus;
+  packageInstalled: boolean;
+  planChanged: boolean;
+}
+
 export interface RuntimeModuleNativeBackend {
   createSession(moduleId: string, version: string): Promise<string>;
   releaseSession(sessionToken: string): Promise<void>;
@@ -224,6 +250,9 @@ export interface RuntimeModuleNativeBackend {
   listShortcuts(sessionToken: string): Promise<RuntimeShortcutStatus[]>;
   rebindShortcut(sessionToken: string, shortcutId: string, accelerator: string): Promise<RuntimeShortcutStatus[]>;
   disableShortcut(sessionToken: string, shortcutId: string): Promise<RuntimeShortcutStatus[]>;
+  createModuleRepositoryGrant(sessionToken: string, path: string): Promise<RuntimeFileGrant>;
+  scanModuleRepository(sessionToken: string, grantId: string): Promise<RuntimeModuleRepositoryPackage[]>;
+  installModuleFromRepository(sessionToken: string, grantId: string, fileName: string): Promise<RuntimeModuleRepositoryInstallResult>;
   onTrayAction(moduleId: string, listener: (itemId: string) => void): Promise<() => void>;
   onShortcutTrigger(moduleId: string, listener: (shortcutId: string) => void): Promise<() => void>;
 }
@@ -298,7 +327,16 @@ export interface RuntimeModuleHostSdkV4 extends RuntimeModuleHostSdkBase, Runtim
   readonly services: RuntimeModuleServices;
 }
 
-export type RuntimeModuleHostSdk = RuntimeModuleHostSdkV2 | RuntimeModuleHostSdkV3 | RuntimeModuleHostSdkV4;
+export interface RuntimeModuleHostSdkV5 extends Omit<RuntimeModuleHostSdkV4, "sdkVersion"> {
+  readonly sdkVersion: 5;
+  readonly moduleRepository: {
+    chooseDirectory(): Promise<RuntimeFileGrant | null>;
+    scan(grantId: string): Promise<RuntimeModuleRepositoryPackage[]>;
+    install(grantId: string, fileName: string): Promise<RuntimeModuleRepositoryInstallResult>;
+  };
+}
+
+export type RuntimeModuleHostSdk = RuntimeModuleHostSdkV2 | RuntimeModuleHostSdkV3 | RuntimeModuleHostSdkV4 | RuntimeModuleHostSdkV5;
 
 export interface ModuleDataInventoryItem {
   moduleId: string;
